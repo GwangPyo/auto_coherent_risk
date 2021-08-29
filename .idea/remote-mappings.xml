@@ -10,6 +10,20 @@
             </list>
           </settings>
         </remote-mappings>
+        <remote-mappings server-id="python@sftp://yoo@115.145.173.13:22/home/yoo/.conda/envs/risk_rl/bin/python3.9">
+          <settings>
+            <list>
+              <mapping local-root="$PROJECT_DIR$" remote-root="/home/yoo/auto_coherent_risk" />
+            </list>
+          </settings>
+        </remote-mappings>
+        <remote-mappings server-id="python@sshConfig://yoo@115.145.173.13:22 password/home/yoo/.conda/envs/risk_rl/bin/python3.9">
+          <settings>
+            <list>
+              <mapping local-root="$PROJECT_DIR$" remote-root="/home/yoo/auto_coherent_risk" />
+            </list>
+          </settings>
+        </remote-mappings>
       </list>
     </list>
   </component>

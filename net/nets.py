@@ -2,14 +2,15 @@ import torch.nn as nn
 import numpy as np
 import torch as th
 import gym
+from net.utils import Mlp
 
 
 class CosineEmbeddingNetwork(nn.Module):
     def __init__(self, num_cosines=64, embedding_dim=64):
         super(CosineEmbeddingNetwork, self).__init__()
         self.net = nn.Sequential(
-            nn.utils.spectral_norm(nn.Linear(num_cosines, embedding_dim)),
-            nn.Mish()
+            nn.Linear(num_cosines, embedding_dim),
+            nn.Mish(),
         )
         self.num_cosines = num_cosines
         self.embedding_dim = embedding_dim
@@ -38,23 +39,23 @@ class QuantileNetwork(nn.Module):
         super(QuantileNetwork, self).__init__()
         if not dueling_net:
             self.net = nn.Sequential(
-                nn.utils.spectral_norm(nn.Linear(embedding_dim, 128)),
+                nn.Linear(embedding_dim, 128),
                 nn.LayerNorm(128),
                 nn.Mish(),
-                nn.utils.spectral_norm(nn.Linear(128, num_actions)),
+                nn.Linear(128, num_actions),
             )
         else:
             self.advantage_net = nn.Sequential(
-                nn.utils.spectral_norm(nn.Linear(embedding_dim, 128)),
+                nn.Linear(embedding_dim, 128),
                 nn.LayerNorm(128),
                 nn.Mish(),
-                nn.utils.spectral_norm(nn.Linear(128, num_actions)),
+                nn.Linear(128, num_actions),
             )
             self.baseline_net = nn.Sequential(
-                nn.utils.spectral_norm(nn.Linear(embedding_dim, 128)),
+                nn.Linear(embedding_dim, 128),
                 nn.LayerNorm(128),
                 nn.Mish(),
-                nn.utils.spectral_norm(nn.Linear(128, 1)),
+                nn.Linear(128, 1),
             )
 
         self.num_actions = num_actions
@@ -134,7 +135,6 @@ class IQN(nn.Module):
         assert q.shape == (batch_size, self.num_actions)
         return q
 
-    def calculate_loss(self, o):
 
 class AutoIQN(IQN):
     def __init__(self, feature_dim, num_actions, K=32, num_cosines=32, dueling_net=False, ):
@@ -151,20 +151,17 @@ class QFeatureNet(nn.Module):
 
         self.obs_dim = np.prod(self.observation_space.shape)
         self.action_dim = np.prod(self.action_space.shape)
-        self.action_low = th.FloatTensor(self.action_space.low)
-        self.action_high = th.FloatTensor(self.action_space.high)
-        self.scale = th.FloatTensor(self.action_high - self.action_low)
+        self.linear = nn.Sequential(nn.Linear(self.obs_dim + self.action_dim, 64), nn.LayerNorm(64), nn.Mish())
+
 
     @property
     def feature_dim(self):
-        return self.obs_dim + self.action_dim
+        return 64
 
     def forward(self, obs, action):
         obs = obs.reshape(-1, self.obs_dim)
         action = action.reshape(-1, self.action_dim)
-        if self.normalize_action:
-            action = 2 * ((action + self.action_low)/self.scale - 0.5)
-        return th.cat([obs, action], dim=-1)
+        return self.linear(th.cat([obs, action], dim=-1))
 
 
 class ObservationFeatureNet(nn.Module):

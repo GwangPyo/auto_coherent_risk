@@ -21,7 +21,7 @@ class Unit(nn.Module):
         return self.layers(x)
 
 
-def Mlp(net_arch: List[int], activation=nn.Mish, layer_norm=False, spectral_norm=True):
+def Mlp(net_arch: List[int], activation=nn.Mish, layer_norm=True, spectral_norm=False):
     assert len(net_arch) > 1
     in_dimensions = net_arch[:-1]
     out_dimensions = net_arch[1:]
@@ -126,51 +126,6 @@ class IQNLosses(object):
         assert td_errors.shape == (batch_size, IQN_DQN.N, IQN_DQN.N_dash)
 
         quantile_huber_loss = IQNLosses.calculate_quantile_huber_loss(td_errors, taus, weights, 1.0)
-
-        return quantile_huber_loss, next_q.detach().mean().item(), \
-               td_errors.detach().abs().sum(dim=1).mean(dim=1, keepdim=True)
-
-    @staticmethod
-    def sac_calculate_iqn_loss(IQN, obs, actions, rewards, next_obs,
-                               dones, next_actions, next_action_log_p_pi, ent_coeff):
-        # Sample fractions.
-        batch_size = obs.shape[0]
-        taus = th.rand(
-            batch_size, IQN.N, dtype=obs.dtype,
-            device=obs.device)
-        feature = th.cat([obs, actions], dim=1)
-        current_sa_quantiles = IQN.q_network.calculate_quantiles(taus, feature)
-        assert current_sa_quantiles.shape == (batch_size, IQN.N, 1)
-
-        with th.no_grad():
-            next_feature = th.cat([next_obs, next_actions])
-            next_q = IQN.target_q_network.calculate_q(next_feature)
-
-            # Sample next fractions.
-            tau_dashes = th.rand(
-                batch_size, IQN.N_dash, dtype=th.float32,
-                device=obs.device)
-            # Calculate quantile values of next states and next actions.
-
-            next_sa_quantiles = (IQN.target_q_network.calculate_quantiles(tau_dashes, next_feature)).transpose(1, 2)
-            assert next_sa_quantiles.shape == (batch_size, 1, IQN.N_dash)
-
-            # Calculate target quantile values.
-            rewards = rewards.flatten()
-            next_action_log_p_pi = next_action_log_p_pi.flatten()
-            rewards = rewards - ent_coeff * next_action_log_p_pi
-            rewards = th.stack([rewards] * IQN.N_dash, dim=1)
-            rewards = rewards[:, None, :]
-            dones = dones.flatten()
-            dones = th.stack([dones] * IQN.N_dash, dim=1)
-            dones = dones[:, None, :]
-            target_sa_quantiles = rewards + (1.0 - dones) * IQN.gamma * next_sa_quantiles
-            assert target_sa_quantiles.shape == (batch_size, 1, IQN.N_dash)
-
-        td_errors = target_sa_quantiles - current_sa_quantiles
-        assert td_errors.shape == (batch_size, IQN.N, IQN.N_dash)
-
-        quantile_huber_loss = IQNLosses.calculate_quantile_huber_loss(td_errors, taus, None, 1.0)
 
         return quantile_huber_loss, next_q.detach().mean().item(), \
                td_errors.detach().abs().sum(dim=1).mean(dim=1, keepdim=True)

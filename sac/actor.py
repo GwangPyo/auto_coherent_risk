@@ -6,7 +6,7 @@ import torch as th
 
 
 LOGSTD_MIN = -8.
-LOGSTD_MAX = 2.
+LOGSTD_MAX = 1.
 
 
 class RescaleAction(nn.Module):
@@ -14,19 +14,26 @@ class RescaleAction(nn.Module):
         super(RescaleAction, self).__init__()
         self.action_space = action_space
         assert isinstance(self.action_space, gym.spaces.Box)
-        self.action_scale = 0.5 * th.FloatTensor(self.action_space.high - self.action_space.low)
-        self.action_bias = 0.5 * th.FloatTensor(self.action_space.high + self.action_space.low)
+        self.action_scale = th.FloatTensor(0.5 * (self.action_space.high - self.action_space.low))
+        self.action_bias = th.FloatTensor(0.5 * (self.action_space.high + self.action_space.low))
+        self.action_scale.requires_grad_(False)
+        self.action_bias.requires_grad_(False)
 
     def forward(self, action):
         return self.action_scale * action + self.action_bias
+
+    def to(self, device):
+        self.action_scale = self.action_scale.to(device)
+        self.action_bias = self.action_bias.to(device)
+        return super().to(device)
 
 
 class SACActor(nn.Module):
     def __init__(self, feature_dim, action_dim, action_scaler):
         super(SACActor, self).__init__()
-        self.layers = Mlp(net_arch=[feature_dim, 64, 64],)
-        self.mu = nn.utils.spectral_norm(nn.Linear(64, action_dim))
-        self.log_sigma = nn.utils.spectral_norm(nn.Linear(64, action_dim))
+        self.layers = Mlp(net_arch=[feature_dim, 64, 64], spectral_norm=False, layer_norm=True )
+        self.mu = nn.Linear(64, action_dim)
+        self.log_sigma = nn.Linear(64, action_dim)
         self.action_scaler = action_scaler
 
     def forward(self, obs):

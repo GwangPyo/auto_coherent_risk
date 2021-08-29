@@ -1,7 +1,14 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <project version="4">
-  <component name="PublishConfigData" autoUpload="Always" serverName="yoo@192.168.0.100:10022 password" remoteFilesAllowedToDisappearOnAutoupload="false">
+  <component name="PublishConfigData" autoUpload="Always" serverName="cps_servers" remoteFilesAllowedToDisappearOnAutoupload="false">
     <serverData>
+      <paths name="t3">
+        <serverdata>
+          <mappings>
+            <mapping deploy="/auto_coherent_risk" local="$PROJECT_DIR$" web="/" />
+          </mappings>
+        </serverdata>
+      </paths>
       <paths name="yoo@192.168.0.100:10022 password">
         <serverdata>
           <mappings>

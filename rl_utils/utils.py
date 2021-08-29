@@ -2,6 +2,10 @@ import torch as th
 from typing import Union
 import gym
 import numpy as np
+from typing import List, Dict
+import pandas as pd
+from tqdm import tqdm
+from datetime import timedelta
 
 
 def get_device(device: Union[th.device, str] = "auto") -> th.device:
@@ -54,3 +58,62 @@ class DummyEnv(object):
     def __init__(self, observation_space, action_space):
         self.observation_space = observation_space
         self.action_space = action_space
+
+
+def information_handler(info_dict_list: List[Dict]):
+    returned_list = []
+    time_deltas = []
+    fps = []
+    length = []
+    rewards = []
+    for dictionary in info_dict_list:
+        # check item sizes
+        if len(dictionary.items()) == 0:
+            continue
+        else:
+            if "terminal_observation" in dictionary.keys():
+                dictionary.pop("terminal_observation")
+            if "episode" in dictionary.keys():
+                v = dictionary["episode"]
+                length.append(v.pop("l"))
+                rewards.append(v.pop("r"))
+                t = v.pop("t")
+                time_deltas.append(timedelta(seconds=t))
+                returned_list.append(dictionary)
+    time_deltas = np.mean(time_deltas)
+    time_info = {"episode/iter_time": time_deltas, "time/fps": fps}
+    return returned_list,  time_info
+
+
+def _evaluate(env, model, steps=1000, verbose=True):
+    scores = []
+    success = []
+    iterator = tqdm(range(steps)) if verbose else range(steps)
+    for _ in iterator:
+        obs = env.reset()
+        done = False
+        score = 0
+        while not done:
+            action, _ = model.predict(obs)
+            obs, reward, done, info = env.step(action)
+            score += reward
+            if done and "is_success" in info.keys():
+                success.append(info["is_success"])
+        scores.append(score)
+    if len(success) > 0:
+        result = {"scores": scores, "success": success}
+    else:
+        result = {"scores": scores}
+    return result
+
+
+def result_to_csv(path, result_dict):
+    df = pd.DataFrame.from_dict(result_dict)
+    df.to_csv(path)
+    return df
+
+
+def evaluate(env, model, save_path, steps=1000, verbose=True):
+    result = _evaluate(env, model, steps, verbose)
+    df = result_to_csv(save_path, result)
+    print(df)
