@@ -6,6 +6,7 @@ from typing import List, Dict
 import pandas as pd
 from tqdm import tqdm
 from datetime import timedelta
+import os
 
 
 def get_device(device: Union[th.device, str] = "auto") -> th.device:
@@ -117,3 +118,33 @@ def evaluate(env, model, save_path, steps=1000, verbose=True):
     result = _evaluate(env, model, steps, verbose)
     df = result_to_csv(save_path, result)
     print(df)
+
+
+def read_csv(path, keys):
+    df = pd.read_csv(path)
+    if isinstance(keys, str):
+        frame = df[keys]
+        return np.mean(frame)
+    try:
+        rets = {}
+        for k in keys:
+            rets[k] = read_csv(path, k)
+        return rets
+    except TypeError:
+        exit(-1)
+
+
+def read_csv_in_folders(folder, keys, suffix=".csv"):
+    filenames = os.listdir(folder)
+    results = []
+    for name in filenames:
+        try:
+            match = (name[-len(suffix):] == suffix)
+            if match:
+                results.append((name, read_csv(path=f"{folder}/{name}", keys=keys)))
+        except IndexError:
+            pass
+    results.sort(key=lambda x: x[0])
+    return results
+
+

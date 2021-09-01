@@ -27,6 +27,7 @@ class ReplayBuffer(object):
         :param size: (int)  Max number of transitions to store in the buffer. When the buffer overflows the old
             memories are dropped.
         """
+
         self._storage = []
         self._maxsize = size
         self._next_idx = 0
@@ -89,6 +90,7 @@ class ReplayBuffer(object):
         :param reward: (float) the reward of the transition
         :param obs_tp1: (Union[np.ndarray, int]) the current observation
         :param done: (bool) is the episode done
+
         """
         data = (obs_t, action, reward, obs_tp1, done, info)
         if self.vectorized:
@@ -154,3 +156,48 @@ class ReplayBuffer(object):
         """
         idxes = [random.randint(0, len(self._storage) - 1) for _ in range(batch_size)]
         return self._encode_sample(idxes)
+
+
+class GoalReplayBuffer(ReplayBuffer):
+    def __init__(self, size: int, device='cpu', vectorized=True):
+        super(GoalReplayBuffer, self).__init__(size, device, vectorized)
+        self.temp = []
+
+    def add(self, obs_t, action, reward, obs_tp1, done, info):
+        data = (obs_t, action, reward, obs_tp1, done, info)
+        self.temp.append(data)
+
+        if done:
+            if self.vectorized:
+                succ = info[0]["is_success"]
+                for history in self.temp:
+                    for o_t, a, r, o_tp1, d, info in zip(*history):
+                        self._add(o_t, a, r, o_tp1, d, float(succ))
+            else:
+                succ = info["is_success"]
+                for history in self.temp:
+                    o_t, a, r, o_tp1, d, info = history
+                    self._add(o_t, a, r, o_tp1, d, float(succ))
+            self.temp = []
+
+    def _encode_sample(self, idxes: Union[List[int], np.ndarray], ):
+        obses_t, actions, rewards, obses_tp1, dones, infos = [], [], [], [], [], []
+        for i in idxes:
+            data = self._storage[i]
+            obs_t, action, reward, obs_tp1, done, info = data
+            obses_t.append(np.array(obs_t, copy=False))
+            actions.append(np.array(action, copy=False))
+            rewards.append(reward)
+            obses_tp1.append(np.array(obs_tp1, copy=False))
+            dones.append(done)
+            infos.append(info)
+        ret = [obses_t, rewards, obses_tp1, dones, infos]
+        ret = [np.asarray(r, dtype=np.float32) for r in ret]
+
+        ret[1] = ret[1].reshape(-1, 1)
+        ret[-2] = ret[-2].reshape(-1, 1)
+        ret[-1] = ret[-1].reshape(-1, 1)
+        ret = [th.from_numpy(r).to(self.device) for r in ret]
+        ret.insert(1, th.from_numpy(np.asarray(actions)).to(self.device))
+
+        return ret

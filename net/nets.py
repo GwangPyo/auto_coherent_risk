@@ -3,6 +3,7 @@ import numpy as np
 import torch as th
 import gym
 from net.utils import Mlp
+from net.spectral_risk_net import SpectralRiskNet
 
 
 class CosineEmbeddingNetwork(nn.Module):
@@ -10,7 +11,7 @@ class CosineEmbeddingNetwork(nn.Module):
         super(CosineEmbeddingNetwork, self).__init__()
         self.net = nn.Sequential(
             nn.Linear(num_cosines, embedding_dim),
-            nn.Mish(),
+            nn.ReLU(),
         )
         self.num_cosines = num_cosines
         self.embedding_dim = embedding_dim
@@ -34,15 +35,49 @@ class CosineEmbeddingNetwork(nn.Module):
         return tau_embeddings
 
 
+class FourierEmbeddingNetwork(nn.Module):
+    def __init__(self, num_trigonometrics=32, embedding_dim=64):
+        super(FourierEmbeddingNetwork, self).__init__()
+        self.net = nn.Sequential(
+            nn.Linear(num_trigonometrics * 2, embedding_dim),
+            nn.Tanh()
+
+        )
+        self.embedding_dim = embedding_dim
+        self.num_trigonos = num_trigonometrics
+
+    def forward(self, taus):
+        batch_size = taus.shape[0]
+        N = taus.shape[1]
+
+        # Calculate i * \pi (i=1,...,N).
+        i_pi = np.pi * th.arange(
+            start=1, end=self.num_trigonos+1, dtype=taus.dtype,
+            device=taus.device).view(1, 1, self.num_trigonos)
+        # Calculate cos(i * \pi * \tau).
+        cosines = th.cos(
+            taus.view(batch_size, N, 1) * i_pi
+            ).view(batch_size * N, self.num_trigonos)
+        sines = th.sin(
+            taus.view(batch_size, N, 1) * i_pi
+            ).view(batch_size * N, self.num_trigonos)
+
+        cat = th.cat([cosines, sines], dim=-1)
+        # Calculate embeddings of taus.
+        tau_embeddings = self.net(cat).view(
+            batch_size, N, self.embedding_dim)
+        return tau_embeddings
+
+
 class QuantileNetwork(nn.Module):
     def __init__(self, num_actions, embedding_dim=64, dueling_net=False):
         super(QuantileNetwork, self).__init__()
         if not dueling_net:
             self.net = nn.Sequential(
-                nn.Linear(embedding_dim, 128),
-                nn.LayerNorm(128),
+                nn.Linear(embedding_dim, 256),
+                nn.LayerNorm(256),
                 nn.Mish(),
-                nn.Linear(128, num_actions),
+                nn.Linear(256, num_actions),
             )
         else:
             self.advantage_net = nn.Sequential(
@@ -113,16 +148,17 @@ class IQN(nn.Module):
         tau_embeddings = self.cosine_net(taus)
         return self.quantile_net(feature, tau_embeddings)
 
-    def forward(self, feature):
-        action = self.calculate_q(feature)
+    def forward(self, feature, taus=None):
+        action = self.calculate_q(feature, taus)
         return action
 
-    def calculate_q(self, feature):
+    def calculate_q(self, feature, taus):
         batch_size = feature.shape[0]
         # Sample fractions.
-        taus = self.cvar_alpha * th.rand(
-            batch_size, self.K, dtype=th.float32,
-            device=feature.device)
+        if taus is None:
+            taus = self.cvar_alpha * th.rand(
+                batch_size, self.K, dtype=th.float32,
+                device=feature.device)
 
         # Calculate quantiles.
         quantiles = self.calculate_quantiles(
@@ -136,11 +172,6 @@ class IQN(nn.Module):
         return q
 
 
-class AutoIQN(IQN):
-    def __init__(self, feature_dim, num_actions, K=32, num_cosines=32, dueling_net=False, ):
-        super(AutoIQN, self).__init__(feature_dim, num_actions, K, num_cosines, dueling_net, 1.0)
-
-
 class QFeatureNet(nn.Module):
     def __init__(self, observation_space, action_space, normalize_action=True):
         assert isinstance(action_space, gym.spaces.Box)
@@ -151,17 +182,34 @@ class QFeatureNet(nn.Module):
 
         self.obs_dim = np.prod(self.observation_space.shape)
         self.action_dim = np.prod(self.action_space.shape)
-        self.linear = nn.Sequential(nn.Linear(self.obs_dim + self.action_dim, 64), nn.LayerNorm(64), nn.Mish())
-
+        self.linear = nn.Sequential(nn.Linear(self.obs_dim + self.action_dim, 256), nn.LayerNorm(256), nn.Mish(),
+                                    nn.Linear(256, 256))
 
     @property
     def feature_dim(self):
-        return 64
+        return 256
 
     def forward(self, obs, action):
         obs = obs.reshape(-1, self.obs_dim)
         action = action.reshape(-1, self.action_dim)
         return self.linear(th.cat([obs, action], dim=-1))
+
+
+class ValueFeatureNet(nn.Module):
+    def __init__(self, observation_space, normalize_action=True):
+        super(ValueFeatureNet, self).__init__()
+        self.observation_space = observation_space
+        self.obs_dim = np.prod(self.observation_space.shape)
+        self.linear = nn.Sequential(nn.Linear(self.obs_dim, 256), nn.LayerNorm(256), nn.Mish(),
+                                    nn.Linear(256, 256))
+
+    @property
+    def feature_dim(self):
+        return 256
+
+    def forward(self, obs):
+        obs = obs.reshape(-1, self.obs_dim)
+        return self.linear(obs)
 
 
 class ObservationFeatureNet(nn.Module):
@@ -178,3 +226,12 @@ class ObservationFeatureNet(nn.Module):
         obs = obs.reshape(-1, self.obs_dim)
         return obs
 
+
+class Discriminator(nn.Module):
+    def __init__(self, feature_dim):
+        super(Discriminator, self).__init__()
+        self.layers = nn.Sequential(Mlp(net_arch=[feature_dim, 64, 64], spectral_norm=False, layer_norm=True),
+                                    nn.Linear(64, 1))
+
+    def forward(self, feature):
+        return self.layers(feature)

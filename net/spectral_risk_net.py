@@ -1,19 +1,19 @@
-import matplotlib.pyplot as plt
 import torch.nn as nn
 from net.utils import Mlp
-import torch as th
 from torch.distributions import Categorical
-import numpy as np
+import torch as th
 
 
 class SpectralRiskNet(nn.Module):
-    def __init__(self, in_features, n_bins=10):
+    def __init__(self, in_features, n_bins=10, init_uniform=True):
         super(SpectralRiskNet, self).__init__()
         self.n_bins = n_bins
         self.layers = nn.Sequential(Mlp(net_arch=[in_features, 64, 64], activation=nn.Mish, layer_norm=True, spectral_norm=True),
                                     nn.utils.spectral_norm(nn.Linear(64, n_bins)),
                                     nn.Softplus())
-        # self._init_weight_to_uniform_distr()
+        self.mid = 1/(2 *n_bins )
+        if init_uniform:
+            self._init_weight_to_uniform_distr()
 
     def forward(self, feature):
         neg_pdf = self.layers(feature)
@@ -27,20 +27,19 @@ class SpectralRiskNet(nn.Module):
         """
         for layer in self.layers:
             if hasattr(layer, 'weight'):
-                nn.init.uniform_(layer.weight, -1, 0)
+                nn.init.uniform_(layer.weight, -self.n_bins, -3)
             if hasattr(layer, 'bias'):
                 layer.bias.data.fill_(-self.n_bins)
 
-    def sample_from_feature(self, feature, sample_shape):
+    def sample(self, feature, sample_shape):
         distribution = self.forward(feature)
-        samples = distribution.sample(sample_shape)
-        return samples + 0.5
+        samples = distribution.sample((sample_shape[-1],) ).transpose(0, 1)/(self.n_bins + 1) \
+                  + self.mid * th.rand(size=sample_shape, device=feature.device)
+        return samples + self.mid
 
 if __name__ == '__main__':
-    net = SpectralRiskNet(64, 10)
+    import torch as th
+    net = SpectralRiskNet(64)
+    samples = net.sample(th.randn(512, 64), (512, 64))
 
-    distribution = net.forward(th.randn((1, 64)))
-    x = x.flatten().numpy()
-
-    plt.hist(x.flatten())
-    plt.show()
+    print(samples.mean().item())

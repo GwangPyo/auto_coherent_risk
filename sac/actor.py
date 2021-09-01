@@ -31,7 +31,7 @@ class RescaleAction(nn.Module):
 class SACActor(nn.Module):
     def __init__(self, feature_dim, action_dim, action_scaler):
         super(SACActor, self).__init__()
-        self.layers = Mlp(net_arch=[feature_dim, 64, 64], spectral_norm=False, layer_norm=True )
+        self.layers = Mlp(net_arch=[feature_dim, 256, 64], spectral_norm=False, layer_norm=True )
         self.mu = nn.Linear(64, action_dim)
         self.log_sigma = nn.Linear(64, action_dim)
         self.action_scaler = action_scaler
@@ -47,8 +47,13 @@ class SACActor(nn.Module):
         self.action_scaler.to(device)
         return nn.Module.to(self, device)
 
-    def sample(self, state):
-        mean, log_std = self.forward(state)
+    def distribution(self, obs):
+        mean, log_std = self.forward(obs)
+        std = log_std.exp()
+        return Normal(mean, std)
+
+    def sample(self, obs):
+        mean, log_std = self.forward(obs)
         std = log_std.exp()
         normal = Normal(mean, std)
         x_t = normal.rsample()  # for reparameterization trick (mean + std * N(0,1))

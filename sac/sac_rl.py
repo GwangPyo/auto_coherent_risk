@@ -1,5 +1,5 @@
 import numpy as np
-from rl_utils import ReplayBuffer, get_device
+from rl_utils import ReplayBuffer, GoalReplayBuffer, get_device
 from rl_utils.utils import DummyEnv
 from stable_baselines3.common.vec_env import VecEnv, DummyVecEnv
 from rl_utils.logger import logkv, logkvs, logkv_mean, dump_tabular
@@ -14,7 +14,7 @@ from torch.utils.tensorboard import SummaryWriter
 
 
 class SAC(object):
-    def __init__(self, env, policy, buffer_size=int(1e+5), policy_kwargs=None, batch_size=256, tau=5e-3):
+    def __init__(self, env, policy, buffer_size=int(1e+5), policy_kwargs=None, batch_size=256, tau=3e-2):
         if not isinstance(env, VecEnv):
             env = DummyVecEnv([lambda: env])
 
@@ -23,7 +23,10 @@ class SAC(object):
         self.action_space = self.env.action_space
 
         self.device = get_device()
-        self.buffer = ReplayBuffer(buffer_size, self.device)
+        if policy == "MlpIQNPolicy":
+            self.buffer = ReplayBuffer(buffer_size, self.device)
+        else:
+            self.buffer = GoalReplayBuffer(buffer_size, self.device)
         if policy_kwargs is None:
             policy_kwargs = {}
         policy_class = policies[policy]
@@ -106,7 +109,7 @@ class SAC(object):
             self.buffer.add(obs.copy(), actions, reward, next_obs.copy(), done, info)
             obs = next_obs
 
-            if s > learning_starts:
+            if s > learning_starts and self.buffer.can_sample(self.batch_size):
                 batch_data = self.buffer.sample(self.batch_size)
                 losses = self.policy.train_step(batch_data, critic_optim=self.critic_optim, actor_optim=self.actor_optim)
                 logkvs(losses)
@@ -139,3 +142,8 @@ class SAC(object):
         return model
 
 
+if __name__ == '__main__':
+    import gym
+    from lunarlander_wrapper import wrapped_lunar_lander
+    rl_model = SAC(policy="MlpIQNPolicy", env= wrapped_lunar_lander())
+    rl_model.learn(50000, )
