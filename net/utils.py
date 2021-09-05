@@ -1,10 +1,11 @@
 import torch as th
 from typing import List
 import torch.nn as nn
+from torch.jit import Final
 
 
 class Unit(nn.Module):
-    def __init__(self, in_dim, out_dim, activation, layer_norm, spectral_norm):
+    def __init__(self, in_dim, out_dim, activation, layer_norm, spectral_norm, batch_norm):
         super(Unit, self).__init__()
         if spectral_norm:
             def Linear(in_dim, out_dim, *args, **kwargs):
@@ -14,6 +15,8 @@ class Unit(nn.Module):
                 return nn.Linear(in_dim, out_dim, *args, **kwargs)
         if layer_norm:
             self.layers = nn.Sequential(Linear(in_dim, out_dim), nn.LayerNorm(out_dim), activation())
+        elif batch_norm:
+            self.layers = nn.Sequential(Linear(in_dim, out_dim), nn.BatchNorm1d(out_dim), activation())
         else:
             self.layers = nn.Sequential(Linear(in_dim, out_dim), activation())
 
@@ -21,14 +24,19 @@ class Unit(nn.Module):
         return self.layers(x)
 
 
-def Mlp(net_arch: List[int], activation=nn.Mish, layer_norm=True, spectral_norm=False):
+def Mlp(net_arch: List[int], activation=nn.Mish, layer_norm=True, batch_norm=False, spectral_norm=False):
     assert len(net_arch) > 1
     in_dimensions = net_arch[:-1]
     out_dimensions = net_arch[1:]
     sequences = []
     for indim, outdim in zip(in_dimensions, out_dimensions):
-        sequences.append(Unit(indim, outdim, activation, layer_norm, spectral_norm))
+        sequences.append(Unit(indim, outdim, activation, layer_norm, spectral_norm, batch_norm))
     return nn.Sequential(*sequences)
+
+
+
+element_wise_huberloss = nn.SmoothL1Loss(reduction='none')
+
 
 
 class IQNLosses(object):
@@ -45,26 +53,25 @@ class IQNLosses(object):
         return sa_quantiles
 
     @staticmethod
-    def calculate_huber_loss(td_errors, kappa=1.0):
+    def calculate_huber_loss(td_errors):
         return th.where(
-            td_errors.abs() <= kappa,
+            td_errors.abs() <= 1.,
             0.5 * td_errors.pow(2),
-            kappa * (td_errors.abs() - 0.5 * kappa))
+            (td_errors.abs() - 0.5))
 
     @staticmethod
-    def calculate_quantile_huber_loss(td_errors, taus, weights=None, kappa=1.0):
-        assert not taus.requires_grad
+    def calculate_quantile_huber_loss(td_errors, taus, reduce=True):
+        # assert not taus.requires_grad
         batch_size, N, N_dash = td_errors.shape
-
         # Calculate huber loss element-wisely.
-        element_wise_huber_loss = IQNLosses.calculate_huber_loss(td_errors, kappa)
+        element_wise_huber_loss = IQNLosses.calculate_huber_loss(td_errors)
         assert element_wise_huber_loss.shape == (
             batch_size, N, N_dash)
 
         # Calculate quantile huber loss element-wisely.
         element_wise_quantile_huber_loss = th.abs(
             taus[..., None] - (td_errors.detach() < 0).float()
-        ) * element_wise_huber_loss / kappa
+        ) * element_wise_huber_loss
         assert element_wise_quantile_huber_loss.shape == (
             batch_size, N, N_dash)
 
@@ -73,11 +80,10 @@ class IQNLosses(object):
             dim=1).mean(dim=1, keepdim=True)
         assert batch_quantile_huber_loss.shape == (batch_size, 1)
 
-        if weights is not None:
-            quantile_huber_loss = (batch_quantile_huber_loss * weights).mean()
-        else:
+        if reduce:
             quantile_huber_loss = batch_quantile_huber_loss.mean()
-
+        else:
+            quantile_huber_loss = batch_quantile_huber_loss
         return quantile_huber_loss
 
     @staticmethod
@@ -125,7 +131,30 @@ class IQNLosses(object):
         td_errors = target_sa_quantiles - current_sa_quantiles
         assert td_errors.shape == (batch_size, IQN_DQN.N, IQN_DQN.N_dash)
 
-        quantile_huber_loss = IQNLosses.calculate_quantile_huber_loss(td_errors, taus, weights, 1.0)
+        quantile_huber_loss = IQNLosses.calculate_quantile_huber_loss(td_errors, taus, weights)
 
         return quantile_huber_loss, next_q.detach().mean().item(), \
                td_errors.detach().abs().sum(dim=1).mean(dim=1, keepdim=True)
+
+@th.jit.script
+def _jit_calculate_quantile_huber_loss(td_errors, taus):
+    # assert not taus.requires_grad
+    batch_size, N, N_dash = td_errors.shape
+    # Calculate huber loss element-wisely.
+    element_wise_huber_loss = IQNLosses.calculate_huber_loss(td_errors)
+    assert element_wise_huber_loss.shape == (
+        batch_size, N, N_dash)
+
+    # Calculate quantile huber loss element-wisely.
+    element_wise_quantile_huber_loss = th.abs(
+        taus[..., None] - (td_errors.detach() < 0).float()
+    ) * element_wise_huber_loss
+    assert element_wise_quantile_huber_loss.shape == (
+        batch_size, N, N_dash)
+
+    # Quantile huber loss.
+    batch_quantile_huber_loss = element_wise_quantile_huber_loss.sum(
+        dim=1).mean(dim=1, keepdim=True)
+    assert batch_quantile_huber_loss.shape == (batch_size, 1)
+    quantile_huber_loss = batch_quantile_huber_loss
+    return quantile_huber_loss

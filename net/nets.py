@@ -40,7 +40,7 @@ class FourierEmbeddingNetwork(nn.Module):
         super(FourierEmbeddingNetwork, self).__init__()
         self.net = nn.Sequential(
             nn.Linear(num_trigonometrics * 2, embedding_dim),
-            nn.Tanh()
+
 
         )
         self.embedding_dim = embedding_dim
@@ -81,16 +81,16 @@ class QuantileNetwork(nn.Module):
             )
         else:
             self.advantage_net = nn.Sequential(
-                nn.Linear(embedding_dim, 128),
-                nn.LayerNorm(128),
+                nn.Linear(embedding_dim, 64),
+                nn.LayerNorm(64),
                 nn.Mish(),
-                nn.Linear(128, num_actions),
+                nn.Linear(64, num_actions),
             )
             self.baseline_net = nn.Sequential(
-                nn.Linear(embedding_dim, 128),
-                nn.LayerNorm(128),
+                nn.Linear(embedding_dim, 64),
+                nn.LayerNorm(64),
                 nn.Mish(),
-                nn.Linear(128, 1),
+                nn.Linear(64, 1),
             )
 
         self.num_actions = num_actions
@@ -131,7 +131,7 @@ class IQN(nn.Module):
         super(IQN, self).__init__()
         # Cosine embedding network.
         self.cosine_net = CosineEmbeddingNetwork(
-            num_cosines=num_cosines, embedding_dim=feature_dim,)
+            num_cosines, embedding_dim=feature_dim,)
         # Quantile network.
         self.quantile_net = QuantileNetwork(
             num_actions=num_actions, dueling_net=dueling_net, embedding_dim=feature_dim)
@@ -147,6 +147,17 @@ class IQN(nn.Module):
     def calculate_quantiles(self, taus, feature):
         tau_embeddings = self.cosine_net(taus)
         return self.quantile_net(feature, tau_embeddings)
+
+    def calculate_normalized_quantiles(self, taus, feature):
+        quantiles = self.calculate_quantiles(taus, feature)
+
+        minimum = th.min(quantiles, dim=1, keepdim=True)[0] # th.ones((taus.shape[0], 1)) * th.min(taus, dim=1, keepdim=True)[0]
+        minimum = minimum.detach()
+        # minimum = self.calculate_quantiles(min_taus, feature)
+        # max_taus = th.ones_like(taus.shape[0], 1) * th.max(taus, dim=1, keepdim=True)[0]
+        maximum = th.max(quantiles, dim=1, keepdim=True)[0]
+        maximum = maximum.detach()
+        return (quantiles - minimum)/(th.abs(maximum - minimum) + 1e-6)
 
     def forward(self, feature, taus=None):
         action = self.calculate_q(feature, taus)
@@ -230,8 +241,8 @@ class ObservationFeatureNet(nn.Module):
 class Discriminator(nn.Module):
     def __init__(self, feature_dim):
         super(Discriminator, self).__init__()
-        self.layers = nn.Sequential(Mlp(net_arch=[feature_dim, 64, 64], spectral_norm=False, layer_norm=True),
-                                    nn.Linear(64, 1))
+        self.layers = nn.Sequential(Mlp(net_arch=[feature_dim, 256, 256], spectral_norm=False, layer_norm=True),
+                                    nn.Linear(256, 1))
 
     def forward(self, feature):
         return self.layers(feature)

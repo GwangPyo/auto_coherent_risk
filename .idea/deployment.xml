@@ -9,6 +9,13 @@
           </mappings>
         </serverdata>
       </paths>
+      <paths name="v4">
+        <serverdata>
+          <mappings>
+            <mapping deploy="/auto_cohrent_risk" local="$PROJECT_DIR$" web="/" />
+          </mappings>
+        </serverdata>
+      </paths>
       <paths name="yoo@192.168.0.100:10022 password">
         <serverdata>
           <mappings>

@@ -10,7 +10,7 @@ from sac.policy import policies
 from torch.optim import Adam
 import torch as th
 import pickle
-from torch.utils.tensorboard import SummaryWriter
+from rl_utils.utils import make_writer
 
 
 class SAC(object):
@@ -59,7 +59,7 @@ class SAC(object):
             else:
                 logkv(k, v)
 
-    def learn(self, steps=10000, learning_starts=1000):
+    def learn(self, steps=10000, learning_starts=1000, tb_log_dir=None, tb_log_name=None, tb_log_option='Force'):
         obs = self.env.reset()
         mean_episode_rewards = deque(maxlen=100)
         mean_episode_success = deque(maxlen=100)
@@ -67,8 +67,13 @@ class SAC(object):
         start_time = time.time()
         n_episodes = 0
         epilen = 0
+        if tb_log_dir is None:
+            writer = make_writer(root_directory_name="/home/yoo", tb_log_name=f"{self.policy_name}", writing_option="Dummy")
+        elif tb_log_dir is not None and tb_log_name is None:
+            writer = make_writer(root_directory_name=tb_log_dir, tb_log_name=f"{self.policy_name}", writing_option=tb_log_dir)
+        else:
+            writer = make_writer(root_directory_name=tb_log_dir, tb_log_name=f"{tb_log_name}", writing_option=tb_log_dir)
 
-        writer = SummaryWriter(log_dir="/home/yoo/risk_rl_tb_log")
         for s in range(steps):
             if s < learning_starts:
                 actions = self.sample_random_actions()
@@ -80,7 +85,6 @@ class SAC(object):
             episode_rewards.append(reward)
             epilen += 1
             if done[0]:
-                obs = self.env.reset()
                 mean_episode_rewards.append(np.sum(episode_rewards))
                 episode_rewards = []
                 current_time = time.time()
@@ -105,9 +109,10 @@ class SAC(object):
                 dump_tabular()
                 if n_episodes % 10 == 0:
                     writer.flush()
-                    print("flush writer")
             self.buffer.add(obs.copy(), actions, reward, next_obs.copy(), done, info)
             obs = next_obs
+            if done[0]:
+                obs = self.env.reset()
 
             if s > learning_starts and self.buffer.can_sample(self.batch_size):
                 batch_data = self.buffer.sample(self.batch_size)
@@ -144,6 +149,6 @@ class SAC(object):
 
 if __name__ == '__main__':
     import gym
-    from lunarlander_wrapper import wrapped_lunar_lander
+    from env_wrappers import wrapped_lunar_lander
     rl_model = SAC(policy="MlpIQNPolicy", env= wrapped_lunar_lander())
     rl_model.learn(50000, )

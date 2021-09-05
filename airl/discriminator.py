@@ -2,6 +2,7 @@ from net.utils import Mlp
 import torch.nn as nn
 import torch as th
 import torch.nn.functional as F
+from jax import jit
 
 
 class Template(nn.Module):
@@ -25,6 +26,7 @@ class Discriminator(nn.Module):
         r = self.g(obs)
         v_t = self.h(obs)
         v_tp1 = self.h(next_obs)
+
         return r + (1. - dones) * v_tp1 - v_t
 
     def forward(self, obs, dones, logp_pi, next_obs):
@@ -35,21 +37,17 @@ class Discriminator(nn.Module):
             logits= self.forward(obs, dones, logp_pi, next_obs)
             return -F.logsigmoid(-logits)
 
-    def loss(self, policy_minibatch, expert_minibatch):
+    def loss(self, policy_minibatch):
         """
-        obs_pi, dones_pi, log_pi, next_obs_pi = policy_minibatch
-        obs_exp, dones_exp, log_p_exp, next_obs_exp = expert_minibatch
+        obs_pi, dones_pi, log_pi, next_obs_pi, success = policy_minibatch
         """
-        logits_pi = self(*policy_minibatch)
-        logits_expert = self(*expert_minibatch)
-        loss_pi = -F.logsigmoid(-logits_pi).mean()
-        loss_exp = -F.logsigmoid(-logits_expert).mean()
-        loss_disc = loss_pi + loss_exp
-        with th.no_grad():
-            acc_pi = (logits_pi < 0).float().mean().item()
-            acc_exp = (logits_expert > 0).float().mean().item()
-        return loss_disc, acc_pi, acc_exp
+        obs_pi, dones_pi, log_pi, next_obs_pi, success = policy_minibatch
+        success = (success - 0.5) * 2   # False |-> -1, True |-> 1
+        success = success.detach()
+        logits = self(obs_pi, dones_pi, log_pi, next_obs_pi)
+        loss = -F.logsigmoid(success * logits).mean()
 
+        return loss
 
 
 

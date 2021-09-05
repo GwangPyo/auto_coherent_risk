@@ -3,10 +3,9 @@ from typing import Union
 import gym
 import numpy as np
 from typing import List, Dict
-import pandas as pd
-from tqdm import tqdm
 from datetime import timedelta
 import os
+from torch.utils.tensorboard import SummaryWriter
 
 
 def get_device(device: Union[th.device, str] = "auto") -> th.device:
@@ -86,65 +85,54 @@ def information_handler(info_dict_list: List[Dict]):
     return returned_list,  time_info
 
 
-def _evaluate(env, model, steps=1000, verbose=True):
-    scores = []
-    success = []
-    iterator = tqdm(range(steps)) if verbose else range(steps)
-    for _ in iterator:
-        obs = env.reset()
-        done = False
-        score = 0
-        while not done:
-            action, _ = model.predict(obs)
-            obs, reward, done, info = env.step(action)
-            score += reward
-            if done and "is_success" in info.keys():
-                success.append(info["is_success"])
-        scores.append(score)
-    if len(success) > 0:
-        result = {"scores": scores, "success": success}
-    else:
-        result = {"scores": scores}
-    return result
+class DummyWriter(object):
+    def __init__(self, *args, **kwargs):
+        pass
+
+    def logkv(self, *args, **kwargs):
+        pass
+
+    def logkvs(self, *args, **kwargs):
+        pass
+
+    def add_scalar(self, *args, **kwargs):
+        pass
+
+    def flush(self):
+        pass
+
+    def close(self):
+        pass
 
 
-def result_to_csv(path, result_dict):
-    df = pd.DataFrame.from_dict(result_dict)
-    df.to_csv(path)
-    return df
-
-
-def evaluate(env, model, save_path, steps=1000, verbose=True):
-    result = _evaluate(env, model, steps, verbose)
-    df = result_to_csv(save_path, result)
-    print(df)
-
-
-def read_csv(path, keys):
-    df = pd.read_csv(path)
-    if isinstance(keys, str):
-        frame = df[keys]
-        return np.mean(frame)
-    try:
-        rets = {}
-        for k in keys:
-            rets[k] = read_csv(path, k)
-        return rets
-    except TypeError:
-        exit(-1)
-
-
-def read_csv_in_folders(folder, keys, suffix=".csv"):
-    filenames = os.listdir(folder)
-    results = []
-    for name in filenames:
+def make_writer(root_directory_name, tb_log_name, writing_option='Force'):
+    if writing_option == 'Force' or 'ask':
         try:
-            match = (name[-len(suffix):] == suffix)
-            if match:
-                results.append((name, read_csv(path=f"{folder}/{name}", keys=keys)))
-        except IndexError:
-            pass
-    results.sort(key=lambda x: x[0])
-    return results
-
-
+            os.listdir(root_directory_name)
+        except FileNotFoundError:
+            if writing_option == 'force':
+                os.mkdir(root_directory_name)
+            elif writing_option == 'ask':
+                while True:
+                    print(f"There is no directory named {root_directory_name}")
+                    option = input("do you want to make the directory?[Yes/No]")
+                    if option == 'Yes' or option == 'yes' or option == 'y' or option == 'Y':
+                        os.mkdir(root_directory_name)
+                        break
+                    elif option == 'No' or option == 'no' or option == 'n' or option == 'N':
+                        print("Do not make writer")
+                        make_writer(root_directory_name, tb_log_name, writing_option="dummy")
+                        break
+                    else:
+                        continue
+        i = 0
+        while True:
+            try:
+                os.mkdir(f"{root_directory_name}/{tb_log_name}_{i}")
+            except FileExistsError:
+                i += 1
+                continue
+            break
+        return SummaryWriter(log_dir=f"{root_directory_name}/{tb_log_name}_{i}")
+    else:
+        return DummyWriter()
