@@ -60,6 +60,14 @@ class IQNLosses(object):
             (td_errors.abs() - 0.5))
 
     @staticmethod
+    def calculate_signed_huber_loss(td_errors):
+        return th.where(
+            td_errors.abs() <= 1.,
+            0.5 * td_errors * th.abs(td_errors),
+            (td_errors - 0.5) * (th.sign(td_errors)))
+
+
+    @staticmethod
     def calculate_quantile_huber_loss(td_errors, taus, reduce=True):
         # assert not taus.requires_grad
         batch_size, N, N_dash = td_errors.shape
@@ -158,3 +166,5 @@ def _jit_calculate_quantile_huber_loss(td_errors, taus):
     assert batch_quantile_huber_loss.shape == (batch_size, 1)
     quantile_huber_loss = batch_quantile_huber_loss
     return quantile_huber_loss
+
+

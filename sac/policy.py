@@ -7,6 +7,7 @@ from sac.critic import IQNQNetwork, IQNVNetwork, RiskAversiveIQNQNetwork, WangTa
 from airl.discriminator import Discriminator
 from net.spectral_risk_net import SpectralRiskNet
 import numpy as np
+from torch.profiler import profile, record_function, ProfilerActivity
 from time import time
 
 
@@ -103,7 +104,6 @@ class MlpIQNSACPolicy(AbstractSACPolicy):
 
     def train_step(self, batch_data, critic_optim, actor_optim):
         loss_summary = {}
-
         obs, actions, rewards, next_obs, dones, info = batch_data
 
         #######################################################
@@ -220,11 +220,11 @@ class AutoRiskSACPolicy(MlpIQNSACPolicy):
         self.discriminator.to(self.device)
         self.init_pf()
 
-        self.rho = SpectralRiskNet(self.observation_dim + self.action_dim, n_bins=10, init_uniform=False)
+        self.rho = SpectralRiskNet(self.qf1.feature_dim, n_bins=10, init_uniform=False)
         self.rho.to(self.device)
-        self.disc_optim = th.optim.Adam(self.discriminator.parameters(), lr=3e-4)
-        self.prob_optim = th.optim.Adam(self.pf1.parameters(), 3e-4)
-        self.rho_optim = th.optim.Adam(self.rho.parameters(), lr=3e-4)
+        self.disc_optim = th.optim.Adam(self.discriminator.parameters(), lr=1e-9, weight_decay=1.)
+        self.prob_optim = th.optim.Adam(self.pf1.parameters(), 1e-9)
+        self.rho_optim = th.optim.Adam(self.rho.parameters(), lr=1e-2,)
         self.init_critic()
 
     def init_pf(self):
@@ -272,8 +272,9 @@ class AutoRiskSACPolicy(MlpIQNSACPolicy):
         taus = self.vf_target.get_default_tau(shape=(obs.shape[0], self.vf_target.N), device=self.device)
         with th.no_grad():
             pf_target_quantile = self.pf_target.calculate_quantile(next_obs, next_actions, taus)
-            pf_target_quantile = th.squeeze(pf_target_quantile) - entropy_coefficient * next_actions_log_p_pi
+            pf_target_quantile = th.squeeze(pf_target_quantile)
             pf_target_quantile = pf_target_quantile[:, None, :]
+
             p_reward = self.discriminator.calculate_reward(obs, dones=dones, logp_pi=logp_pi, next_obs=next_obs)
 
         pf_loss, pf_next, pf_td_error = self.pf1.sac_calculate_iqn_loss(pf_target_quantile, obs, actions,
@@ -281,6 +282,7 @@ class AutoRiskSACPolicy(MlpIQNSACPolicy):
         self.prob_optim.zero_grad()
         pf_loss.backward()
         self.prob_optim.step()
+        loss_summary["pf_loss"] = pf_loss.item()
 
         #######################################################
         # train qf1, qf2                                      #
@@ -316,8 +318,11 @@ class AutoRiskSACPolicy(MlpIQNSACPolicy):
         critic_optim.zero_grad()
         critic_loss.backward()
         critic_optim.step()
-        loss_summary["critic_loss"] = critic_loss.item()
 
+        loss_summary["critic_loss"] = critic_loss.item()
+        loss_summary["qf1_loss"] = qf1_loss.item()
+        loss_summary["qf2_loss"] = qf2_loss.item()
+        loss_summary["vf_loss"] = vf_loss.item()
 
         #######################################################
         # train actor                                         #
@@ -326,7 +331,7 @@ class AutoRiskSACPolicy(MlpIQNSACPolicy):
         current_actions, log_p_pi, _ = self.actor.sample(obs)
 
         with th.no_grad():
-            feature = th.cat([obs, actions], dim=1)
+            feature = self.qf1.feature_extractor(obs, actions)
             taus_policy, _ = self.rho.sample(feature, (obs.shape[0], self.qf1.K))
             rho_entropy = self.rho.entropy(feature)
         qf1_current = self.qf1(obs, current_actions, taus_policy.detach())
@@ -347,13 +352,17 @@ class AutoRiskSACPolicy(MlpIQNSACPolicy):
 
         current_actions = current_actions.detach()
         taus_qf, logprobs = self.rho.sample(feature, (obs.shape[0], self.qf1.N_dash))
-        # taus_pf, _  = self.rho.sample(feature, (obs.shape[0], self.qf1.N))  # self.pf1.get_default_tau(shape=(obs.shape[0], self.qf1.N), device=self.device)
-        pf1_quantile = self.pf1.calculate_normalized_quantile(obs, current_actions, taus_qf)
+        with th.no_grad():
+            taus_pf = self.pf1.get_default_tau(shape=(obs.shape[0], self.qf1.N), device=self.device)
+            pf1_quantile_normalized = self.pf1.calculate_normalized_quantile(obs, current_actions, taus_pf)
+
         qf1_quantiles_rho = self.qf1.calculate_normalized_quantile(obs, current_actions, taus_qf)
         qf2_quantiles_rho = self.qf2.calculate_normalized_quantile(obs, current_actions, taus_qf)
         qf_qunatiles_rho = th.min(qf1_quantiles_rho, qf2_quantiles_rho)
-        rho_loss = self.qf1.quantile_huber_loss(qf_qunatiles_rho, pf1_quantile.transpose(1, 2), taus_qf, reduce=False) * (-logprobs.sum(dim=1, keepdim=True))
-        rho_loss = rho_loss.mean().clamp(0, 100)
+
+        rho_loss = self.qf1.quantile_huber_loss(qf_qunatiles_rho, pf1_quantile_normalized.transpose(1, 2), taus_pf, reduce=False) * (-logprobs.sum(dim=1, keepdim=True))
+
+        rho_loss = rho_loss.mean()
 
         self.rho_optim.zero_grad()
 
@@ -381,7 +390,7 @@ class AutoRiskSACPolicy(MlpIQNSACPolicy):
             ret[f'loss/{k}'] = loss_summary[k]
         ret["model/qf1"] = qf1_quantiles.mean().item()
         ret["model/qf2"] = qf2_quantiles.mean().item()
-        ret["model/normalized_pf"] = pf1_quantile.mean().item()
+        ret["model/p_reward"] = p_reward.mean().item()
         ret["model/rho_entropy_per_max"] = rho_entropy.mean().item()
 
         ret["model/risk_mean"] = taus_policy.mean().item()

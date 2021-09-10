@@ -4,9 +4,13 @@ import torch as th
 import gym
 from net.utils import Mlp
 from net.spectral_risk_net import SpectralRiskNet
+from typing_extensions import Final
 
 
 class CosineEmbeddingNetwork(nn.Module):
+    num_cosines: Final[int]
+    embedding_dim: Final[int]
+
     def __init__(self, num_cosines=64, embedding_dim=64):
         super(CosineEmbeddingNetwork, self).__init__()
         self.net = nn.Sequential(
@@ -75,20 +79,20 @@ class QuantileNetwork(nn.Module):
         if not dueling_net:
             self.net = nn.Sequential(
                 nn.Linear(embedding_dim, 256),
-                nn.LayerNorm(256),
+
                 nn.Mish(),
                 nn.Linear(256, num_actions),
             )
         else:
             self.advantage_net = nn.Sequential(
                 nn.Linear(embedding_dim, 64),
-                nn.LayerNorm(64),
+
                 nn.Mish(),
                 nn.Linear(64, num_actions),
             )
             self.baseline_net = nn.Sequential(
                 nn.Linear(embedding_dim, 64),
-                nn.LayerNorm(64),
+
                 nn.Mish(),
                 nn.Linear(64, 1),
             )
@@ -132,6 +136,7 @@ class IQN(nn.Module):
         # Cosine embedding network.
         self.cosine_net = CosineEmbeddingNetwork(
             num_cosines, embedding_dim=feature_dim,)
+
         # Quantile network.
         self.quantile_net = QuantileNetwork(
             num_actions=num_actions, dueling_net=dueling_net, embedding_dim=feature_dim)
@@ -151,7 +156,7 @@ class IQN(nn.Module):
     def calculate_normalized_quantiles(self, taus, feature):
         quantiles = self.calculate_quantiles(taus, feature)
 
-        minimum = th.min(quantiles, dim=1, keepdim=True)[0] # th.ones((taus.shape[0], 1)) * th.min(taus, dim=1, keepdim=True)[0]
+        minimum = th.min(quantiles, dim=1, keepdim=True)[0]
         minimum = minimum.detach()
         # minimum = self.calculate_quantiles(min_taus, feature)
         # max_taus = th.ones_like(taus.shape[0], 1) * th.max(taus, dim=1, keepdim=True)[0]
@@ -193,7 +198,7 @@ class QFeatureNet(nn.Module):
 
         self.obs_dim = np.prod(self.observation_space.shape)
         self.action_dim = np.prod(self.action_space.shape)
-        self.linear = nn.Sequential(nn.Linear(self.obs_dim + self.action_dim, 256), nn.LayerNorm(256), nn.Mish(),
+        self.linear = nn.Sequential(nn.Linear(self.obs_dim + self.action_dim, 256),  nn.Mish(),
                                     nn.Linear(256, 256))
 
     @property
@@ -211,7 +216,7 @@ class ValueFeatureNet(nn.Module):
         super(ValueFeatureNet, self).__init__()
         self.observation_space = observation_space
         self.obs_dim = np.prod(self.observation_space.shape)
-        self.linear = nn.Sequential(nn.Linear(self.obs_dim, 256), nn.LayerNorm(256), nn.Mish(),
+        self.linear = nn.Sequential(nn.Linear(self.obs_dim, 256),   nn.Mish(),
                                     nn.Linear(256, 256))
 
     @property

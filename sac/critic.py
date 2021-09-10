@@ -59,7 +59,6 @@ class PowerTauGenerator(WangTauGenerator):
         return taus
 
 
-@th.jit.script
 def get_target_quantile(next_sa_quantiles, rewards, dones, gamma):
     with th.no_grad():
         next_q = next_sa_quantiles.mean(dim=-1)

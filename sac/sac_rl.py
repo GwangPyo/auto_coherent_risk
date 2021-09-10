@@ -14,7 +14,7 @@ from rl_utils.utils import make_writer
 
 
 class SAC(object):
-    def __init__(self, env, policy, buffer_size=int(1e+5), policy_kwargs=None, batch_size=256, tau=3e-2):
+    def __init__(self, env, policy, buffer_size=int(1e+6), policy_kwargs=None, batch_size=256, tau=0.005):
         if not isinstance(env, VecEnv):
             env = DummyVecEnv([lambda: env])
 
@@ -59,7 +59,8 @@ class SAC(object):
             else:
                 logkv(k, v)
 
-    def learn(self, steps=10000, learning_starts=1000, tb_log_dir=None, tb_log_name=None, tb_log_option='Force'):
+    def learn(self, steps=10000, learning_starts=1000, tb_log_dir=None, tb_log_name=None, tb_log_option='Force',
+               ):
         obs = self.env.reset()
         mean_episode_rewards = deque(maxlen=100)
         mean_episode_success = deque(maxlen=100)
@@ -70,9 +71,9 @@ class SAC(object):
         if tb_log_dir is None:
             writer = make_writer(root_directory_name="/home/yoo", tb_log_name=f"{self.policy_name}", writing_option="Dummy")
         elif tb_log_dir is not None and tb_log_name is None:
-            writer = make_writer(root_directory_name=tb_log_dir, tb_log_name=f"{self.policy_name}", writing_option=tb_log_dir)
+            writer = make_writer(root_directory_name=tb_log_dir, tb_log_name=f"{self.policy_name}", writing_option=tb_log_option)
         else:
-            writer = make_writer(root_directory_name=tb_log_dir, tb_log_name=f"{tb_log_name}", writing_option=tb_log_dir)
+            writer = make_writer(root_directory_name=tb_log_dir, tb_log_name=f"{tb_log_name}", writing_option=tb_log_option)
 
         for s in range(steps):
             if s < learning_starts:
@@ -82,6 +83,7 @@ class SAC(object):
                 actions = actions[None]
 
             next_obs, reward, done, info = self.env.step(actions)
+            self.buffer.add(obs.copy(), actions, reward, next_obs.copy(), done, info)
             episode_rewards.append(reward)
             epilen += 1
             if done[0]:
@@ -109,7 +111,7 @@ class SAC(object):
                 dump_tabular()
                 if n_episodes % 10 == 0:
                     writer.flush()
-            self.buffer.add(obs.copy(), actions, reward, next_obs.copy(), done, info)
+
             obs = next_obs
             if done[0]:
                 obs = self.env.reset()

@@ -9,10 +9,11 @@ class SpectralRiskNet(nn.Module):
     def __init__(self, in_features, n_bins=10, init_uniform=True):
         super(SpectralRiskNet, self).__init__()
         self.n_bins = n_bins
-        self.layers = nn.Sequential(Mlp(net_arch=[in_features, 64, 64], activation=nn.Mish, batch_norm=False,
-                                        layer_norm=True, spectral_norm=True),
-                                    nn.utils.spectral_norm(nn.Linear(64, n_bins)),
-                                    nn.Softplus())
+        self.float_n_bins_plus_eps = float(self.n_bins) + 1.
+        self.layers = nn.Sequential(
+                                    nn.Linear(in_features, 64, bias=False), nn.Tanh(),
+                                    nn.Linear(64, n_bins),
+                                    nn.Softmax(dim=1))
         self.mid = 1/(2 * n_bins )
         self.maximum_entropy = np.log(self.n_bins)
         if init_uniform:
@@ -20,10 +21,12 @@ class SpectralRiskNet(nn.Module):
 
     def forward(self, feature):
 
-        neg_pdf = self.layers(feature)
-        logits = 1. -neg_pdf.cumsum(dim=1)
+        pdf = self.layers(feature)
+        # differentiable sort
+        indices = th.argsort(pdf, dim=1, descending=True)
+        pdf = th.gather(pdf, dim=1, index=indices)
 
-        return Categorical(logits=logits)
+        return Categorical(probs=pdf)
 
     def _init_weight_to_uniform_distr(self):
         """
@@ -42,6 +45,7 @@ class SpectralRiskNet(nn.Module):
         sample_ret = sample.transpose(0, 1)/(self.n_bins + 1) \
                   + self.mid * th.rand(size=sample_shape, device=feature.device)
         logprob = distribution.log_prob(sample).transpose(0, 1)
+
         return sample_ret + self.mid, logprob
 
     def entropy(self, feature):

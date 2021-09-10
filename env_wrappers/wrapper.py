@@ -61,5 +61,6 @@ class BipedalWalkerHardcoreWrapper(AbstractWrapper):
             info["is_success"] = not (info["TimeLimit.truncated"])
         elif done:
             info["is_success"] = True
+
         return next_obs, reward, done, info
 
