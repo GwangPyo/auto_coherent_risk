@@ -41,7 +41,7 @@ class SpectralRiskNet(nn.Module):
 
     def sample(self, feature, sample_shape):
         distribution = self.forward(feature)
-        sample =  distribution.sample((sample_shape[-1],) )
+        sample = distribution.sample((sample_shape[-1],) )
         sample_ret = sample.transpose(0, 1)/(self.n_bins + 1) \
                   + self.mid * th.rand(size=sample_shape, device=feature.device)
         logprob = distribution.log_prob(sample).transpose(0, 1)

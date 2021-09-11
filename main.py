@@ -1,5 +1,5 @@
 from sac import SAC
-from env_wrappers import wrapped_bipdeal_walker_hardcore
+from env_wrappers import wrapped_lunar_lander
 from rl_utils.evaluation_utils import evaluate
 import numpy as np
 from misc.seed import fix_seed
@@ -10,9 +10,10 @@ if __name__ == '__main__':
     buffer_size=int(1e+6)
     fix_seed(7777)
 
-    rl_model = SAC(policy="AutoRiskIQNPolicy", env= wrapped_bipdeal_walker_hardcore(),  buffer_size=buffer_size)
-    rl_model.learn(learning_steps, tb_log_dir="/home/yoo/risk_rl_tb_log", tb_log_name=f"iqn_auto_bipdeal", tb_log_option="Force")
+    rl_model = SAC(policy="ODEMlpoIQNPolicy", env= wrapped_lunar_lander(),  buffer_size=buffer_size)
+    rl_model.learn(learning_steps, tb_log_dir="/home/yoo/risk_rl_tb_log", tb_log_name=f"iqn_lunarlander_ode", tb_log_option="Force")
     rl_model.save(f"/home/yoo/risk_results/models/auto_risk")
+    """
     evaluate(env=wrapped_bipdeal_walker_hardcore(), model=rl_model, steps=10000,
              save_path=f"/home/yoo/risk_results/auto_risk_10000.csv")
 
@@ -35,3 +36,4 @@ if __name__ == '__main__':
     model.save(f"/home/yoo/risk_results/models/iqn_power_{-0.75}")
     evaluate(env=wrapped_bipdeal_walker_hardcore(), model=model, steps=10000,
              save_path=f"/home/yoo/risk_results/iqn_power_{-0.75}_10000.csv")
+    """

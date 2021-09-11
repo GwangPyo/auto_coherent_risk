@@ -5,6 +5,7 @@ import gym
 from net.utils import Mlp
 from net.spectral_risk_net import SpectralRiskNet
 from typing_extensions import Final
+from net.odenet import ODEQuantileBlock
 
 
 class CosineEmbeddingNetwork(nn.Module):
@@ -79,7 +80,6 @@ class QuantileNetwork(nn.Module):
         if not dueling_net:
             self.net = nn.Sequential(
                 nn.Linear(embedding_dim, 256),
-
                 nn.Mish(),
                 nn.Linear(256, num_actions),
             )
@@ -173,6 +173,51 @@ class IQN(nn.Module):
         # Sample fractions.
         if taus is None:
             taus = self.cvar_alpha * th.rand(
+                batch_size, self.K, dtype=th.float32,
+                device=feature.device)
+
+        # Calculate quantiles.
+        quantiles = self.calculate_quantiles(
+            taus, feature)
+        assert quantiles.shape == (batch_size, self.K, self.num_actions)
+
+        # Calculate expectations of value distributions.
+
+        q = quantiles.mean(dim=1)
+        assert q.shape == (batch_size, self.num_actions)
+        return q
+
+
+class ODEIQN(nn.Module):
+    def __init__(self, feature_dim, num_actions, K=32):
+        super(ODEIQN, self).__init__()
+        self.K = K
+        self.num_actions = num_actions
+        self.quantile_net = ODEQuantileBlock(feature_dim, num_actions)
+
+    def calculate_quantiles(self, taus, feature):
+        return self.quantile_net(feature, taus)
+
+    def calculate_normalized_quantiles(self, taus, feature):
+        quantiles = self.calculate_quantiles(taus, feature)
+
+        minimum = th.min(quantiles, dim=1, keepdim=True)[0]
+        minimum = minimum.detach()
+        # minimum = self.calculate_quantiles(min_taus, feature)
+        # max_taus = th.ones_like(taus.shape[0], 1) * th.max(taus, dim=1, keepdim=True)[0]
+        maximum = th.max(quantiles, dim=1, keepdim=True)[0]
+        maximum = maximum.detach()
+        return (quantiles - minimum)/(th.abs(maximum - minimum) + 1e-6)
+
+    def forward(self, feature, taus=None):
+        action = self.calculate_q(feature, taus)
+        return action
+
+    def calculate_q(self, feature, taus):
+        batch_size = feature.shape[0]
+        # Sample fractions.
+        if taus is None:
+            taus = th.rand(
                 batch_size, self.K, dtype=th.float32,
                 device=feature.device)
 

@@ -3,7 +3,9 @@ import torch as th
 from abc import ABCMeta, abstractmethod
 from rl_utils.utils import dump_state_dict, polyak_update, dimension
 from sac.actor import SACActor, RescaleAction
-from sac.critic import IQNQNetwork, IQNVNetwork, RiskAversiveIQNQNetwork, WangTauGenerator, PowerTauGenerator
+from sac.critic import IQNQNetwork, IQNVNetwork, RiskAversiveIQNQNetwork, WangTauGenerator, \
+    PowerTauGenerator, ODEIQNQNetwork, ODEIQNValueNetwork
+
 from airl.discriminator import Discriminator
 from net.spectral_risk_net import SpectralRiskNet
 import numpy as np
@@ -181,6 +183,15 @@ class MlpIQNSACPolicy(AbstractSACPolicy):
         ret["model/qf1"] = qf1_current.mean().item()
         ret["model/qf2"] = qf2_current.mean().item()
         return ret
+
+
+class ODEMlpoIQNPolicy(MlpIQNSACPolicy):
+    def _build_qf(self):
+        return ODEIQNQNetwork(observation_space=self.observation_space,
+                              action_space=self.action_space,
+                              )
+    def _build_vf(self):
+        return IQNVNetwork(observation_space=self.observation_space)
 
 
 class WangIQNPolicy(MlpIQNSACPolicy):
@@ -400,6 +411,7 @@ class AutoRiskSACPolicy(MlpIQNSACPolicy):
 policies = {"MlpIQNPolicy": MlpIQNSACPolicy,
             "WangPolicy": WangIQNPolicy,
             "PowerPolicy": PowerIQNPolicy,
+            "ODEMlpoIQNPolicy": ODEMlpoIQNPolicy,
             "AutoRiskIQNPolicy": AutoRiskSACPolicy}
 
 

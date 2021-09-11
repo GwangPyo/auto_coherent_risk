@@ -2,7 +2,7 @@ from net.nets import IQN
 import torch.nn as nn
 import torch as th
 from net.utils import IQNLosses, _jit_calculate_quantile_huber_loss
-from net.nets import QFeatureNet, ValueFeatureNet
+from net.nets import QFeatureNet, ValueFeatureNet, ODEIQN
 import torch
 import numpy as np
 
@@ -176,6 +176,59 @@ class IQNQNetwork(IQNValueNet):
 
     def calculate_normalized_quantile(self, obs, actions, taus):
         feature = self.feature_extractor(obs, actions)
+        return self.quantile_net.calculate_normalized_quantiles(taus=taus, feature=feature)
+
+
+class ODEIQNQNetwork(IQNValueNet):
+    def __init__(self,  observation_space, action_space, N=16, N_dash=16, K=64):
+        super(ODEIQNQNetwork, self).__init__(
+            feature_extractor_cls=QFeatureNet,
+            feature_net_initializers={"observation_space": observation_space,
+                                      "action_space": action_space,
+                                      "normalize_action": True},
+            N=N,
+            N_dash=N_dash,
+            K=K,
+            quantile_net_cls=ODEIQN,
+
+        )
+    def forward(self, obs, action, taus=None):
+        z = self.feature_extractor(obs, action)
+        return self.quantile_net(z, taus)
+
+    def calculate_quantile(self, obs, actions, taus):
+        feature = self.feature_extractor(obs, actions)
+        return self.quantile_net.calculate_quantiles(taus=taus, feature=feature)
+
+    def calculate_normalized_quantile(self, obs, actions, taus):
+        feature = self.feature_extractor(obs, actions)
+        return self.quantile_net.calculate_normalized_quantiles(taus=taus, feature=feature)
+
+
+class ODEIQNValueNetwork(IQNValueNet):
+    def __init__(self, observation_space, N=16, N_dash=16, K=64):
+        super(ODEIQNValueNetwork, self).__init__(
+            feature_extractor_cls=QFeatureNet,
+            feature_net_initializers={"observation_space": observation_space,
+                                      "action_space": 1,
+                                      "normalize_action": True},
+            N=N,
+            N_dash=N_dash,
+            K=K,
+            quantile_net_cls=ODEIQN,
+
+        )
+
+    def forward(self, obs, taus=None):
+        z = self.feature_extractor(obs)
+        return self.quantile_net(z, taus)
+
+    def calculate_quantile(self, obs, taus):
+        feature = self.feature_extractor(obs)
+        return self.quantile_net.calculate_quantiles(taus=taus, feature=feature)
+
+    def calculate_normalized_quantile(self, obs, taus):
+        feature = self.feature_extractor(obs)
         return self.quantile_net.calculate_normalized_quantiles(taus=taus, feature=feature)
 
 
