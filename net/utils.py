@@ -144,8 +144,8 @@ class IQNLosses(object):
         return quantile_huber_loss, next_q.detach().mean().item(), \
                td_errors.detach().abs().sum(dim=1).mean(dim=1, keepdim=True)
 
-@th.jit.script
-def _jit_calculate_quantile_huber_loss(td_errors, taus):
+
+def quantile_huber_loss(td_errors, taus):
     # assert not taus.requires_grad
     batch_size, N, N_dash = td_errors.shape
     # Calculate huber loss element-wisely.
@@ -164,7 +164,60 @@ def _jit_calculate_quantile_huber_loss(td_errors, taus):
     batch_quantile_huber_loss = element_wise_quantile_huber_loss.sum(
         dim=1).mean(dim=1, keepdim=True)
     assert batch_quantile_huber_loss.shape == (batch_size, 1)
-    quantile_huber_loss = batch_quantile_huber_loss
-    return quantile_huber_loss
+    loss = batch_quantile_huber_loss
+    return loss
 
+
+def tqc_quantile_huber_loss(td_errors, taus):
+    # assert not taus.requires_grad
+    batch_size, N, N_dash = td_errors.shape
+    taus = taus.reshape(batch_size, 1, -1, 1)
+    # Calculate huber loss element-wisely.
+    element_wise_huber_loss = IQNLosses.calculate_huber_loss(td_errors)
+    assert element_wise_huber_loss.shape == (
+        batch_size, N, N_dash)
+
+    # Calculate quantile huber loss element-wisely.
+    element_wise_quantile_huber_loss = th.abs(
+        taus[..., None] - (td_errors.detach() < 0).float()
+    ) * element_wise_huber_loss
+    assert element_wise_quantile_huber_loss.shape == (
+        batch_size, N, N_dash)
+
+    # Quantile huber loss.
+    batch_quantile_huber_loss = element_wise_quantile_huber_loss.sum(
+        dim=1).mean(dim=1, keepdim=True)
+    assert batch_quantile_huber_loss.shape == (batch_size, 1)
+    loss = batch_quantile_huber_loss
+    return loss
+
+class MLP(nn.Module):
+    def __init__(
+            self,
+            input_size,
+            hidden_sizes,
+            output_size,
+            activation=nn.Mish,
+            layer_norm=True
+    ):
+        super().__init__()
+        # TODO: initialization
+        fcs = []
+        in_size = input_size
+        self.activation = activation
+        for i, next_size in enumerate(hidden_sizes):
+            fc = nn.Linear(in_size, next_size)
+            self.add_module(f'fc{i}', fc)
+            fcs.append(fc)
+            if layer_norm:
+                fcs.append(nn.LayerNorm(next_size))
+            in_size = next_size
+            fcs.append(self.activation(inplace=True))
+        self.fcs = nn.Sequential(*fcs)
+        self.last_fc = nn.Linear(in_size, output_size)
+
+    def forward(self, input):
+        h = self.fcs(input)
+        output = self.last_fc(h)
+        return output
 

@@ -1,69 +1,65 @@
-import torch.nn as nn
-from torch.distributions import Normal
-from net.utils import Mlp
-import gym
 import torch as th
+import torch.nn as nn
+from torch.distributions import Distribution, Normal
+import numpy as np
+from torch.nn.functional import logsigmoid
 
 
-LOGSTD_MIN = -8.
-LOGSTD_MAX = 1.
-
-
-class RescaleAction(nn.Module):
-    def __init__(self, action_space):
-        super(RescaleAction, self).__init__()
-        self.action_space = action_space
-        assert isinstance(self.action_space, gym.spaces.Box)
-        self.action_scale = th.FloatTensor(0.5 * (self.action_space.high - self.action_space.low))
-        self.action_bias = th.FloatTensor(0.5 * (self.action_space.high + self.action_space.low))
-        self.action_scale.requires_grad_(False)
-        self.action_bias.requires_grad_(False)
-
-    def forward(self, action):
-        return self.action_scale * action + self.action_bias
-
-    def to(self, device):
-        self.action_scale = self.action_scale.to(device)
-        self.action_bias = self.action_bias.to(device)
-        return super().to(device)
+LOG2 = np.log(2)
+LOGSTD_MIN_MAX = (-5, 2)
 
 
 class SACActor(nn.Module):
-    def __init__(self, feature_dim, action_dim, action_scaler):
-        super(SACActor, self).__init__()
-        self.layers = Mlp(net_arch=[feature_dim, 256, 64], spectral_norm=False, layer_norm=True )
-        self.mu = nn.Linear(64, action_dim)
-        self.log_sigma = nn.Linear(64, action_dim)
-        self.action_scaler = action_scaler
+    def __init__(self, feature_dim, action_dim):
+        super().__init__()
+        self.action_dim = action_dim
+        self.net = nn.Sequential(nn.Linear(feature_dim, 256),
+                                 nn.Mish(inplace=True),
+                                 nn.Linear(256, 256))
+        self.mean = nn.Linear(256, action_dim)
+        self.logstd = nn.Linear(256, action_dim)
 
     def forward(self, obs):
-        z = self.layers(obs)
-        mean = self.mu(z)
-        std = self.log_sigma(z)
-        std = std.clamp(LOGSTD_MIN, LOGSTD_MAX)
+        z = self.net(obs)
+        mean = self.mean(z)
+        logstd = self.logstd(z)
+        logstd = logstd.clamp(*LOGSTD_MIN_MAX)
+        std = th.exp(logstd)
         return mean, std
 
-    def to(self, device):
-        self.action_scaler.to(device)
-        return nn.Module.to(self, device)
-
     def distribution(self, obs):
-        mean, log_std = self.forward(obs)
-        std = log_std.exp()
-        return Normal(mean, std)
+        mean, std = self.forward(obs)
+        return self._distribution(mean, std)
+
+    @staticmethod
+    def _distribution(mean, std):
+        return TanhNormal(mean, std)
 
     def sample(self, obs):
-        mean, log_std = self.forward(obs)
-        std = log_std.exp()
-        normal = Normal(mean, std)
-        x_t = normal.rsample()  # for reparameterization trick (mean + std * N(0,1))
-        y_t = th.tanh(x_t)
-        action = self.action_scaler(y_t)
-        log_prob = normal.log_prob(x_t)
-        # Enforcing Action Bound
-        log_prob -= th.log(self.action_scaler.action_scale * (1 - y_t.pow(2)) + 1e-8)
-        log_prob = log_prob.sum(1, keepdim=True)
-        mean = self.action_scaler(mean)
-        return action, log_prob, mean
+        mean, logstd = self.forward(obs)
+        tanh_normal = self._distribution(mean, logstd)
+        action, pre_tanh = tanh_normal.rsample()
+
+        logprob = tanh_normal.log_prob(pre_tanh)
+        logprob = logprob.sum(dim=1, keepdim=True)
+        return action, logprob, th.tanh(mean)
 
 
+class TanhNormal(Distribution):
+    def __init__(self, normal_mean, normal_std):
+        super().__init__()
+        self.normal_mean = normal_mean
+        self.normal_std = normal_std
+        self.standard_normal = Normal(th.zeros_like(self.normal_mean, device=normal_mean.device),
+                                      th.ones_like(self.normal_std, device=normal_std.device))
+        self.normal = Normal(normal_mean, normal_std)
+
+    def log_prob(self, pre_tanh):
+        log_det = 2 * np.log(2) + logsigmoid(2 * pre_tanh) + logsigmoid(-2 * pre_tanh)
+        result = self.normal.log_prob(pre_tanh) - log_det
+        return result
+
+    def rsample(self, sample_shape=th.Size()):
+        pretanh = self.normal_mean + self.normal_std * self.standard_normal.sample()
+
+        return th.tanh(pretanh), pretanh

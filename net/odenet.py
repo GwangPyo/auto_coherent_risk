@@ -1,6 +1,7 @@
 import torch as th
 import math
 import torch.nn as nn
+import numpy as np
 
 
 def ode_solve(z0, t0, t1, f):
@@ -75,7 +76,7 @@ class ODEAdjoint(th.autograd.Function):
         func = ctx.func
         t, z, flat_parameters = ctx.saved_tensors
         time_len, bs, *z_shape = z.size()
-        n_dim = th.prod(z_shape).item()
+        n_dim = np.prod(z_shape).item()
         n_params = flat_parameters.size(0)
 
         # Dynamics of augmented system to be calculated backwards in time
@@ -213,7 +214,6 @@ class ODELinear(ODEF):
 
     def forward(self, x, t):
         x = th.cat([x, t], dim=1)
-
         h = self.activation(self.lin1(x))
         out = self.lin2(h)
         return out
@@ -222,7 +222,7 @@ class ODELinear(ODEF):
 class ODEBlock(nn.Module):
     def __init__(self, h_dim, t_start=0.0, t_end=1.0, dt=0.25):
         super(ODEBlock, self).__init__()
-        self.layer = ODELinear(h_dim)
+        self.layer = NeuralODE(ODELinear(h_dim))
         self.times = th.arange(start=t_start, end=t_end, step=dt, dtype=th.float32,)
 
     def to(self, device):
@@ -262,18 +262,19 @@ def identity(taus: th.Tensor):
 class ODEQuantileBlock(nn.Module):
     sorting = {"default": sort_taus, "diff_sort": diff_sort_taus, "do_nothing": identity}
 
-    def __init__(self, feature_dim, n_actions, sorting='default'):
+    def __init__(self, feature_dim, sorting='default'):
         super(ODEQuantileBlock, self).__init__()
-        self.ode_layer = ODELinear(feature_dim)
+        self.ode_layer = NeuralODE(ODELinear(feature_dim))
         self.sort = ODEQuantileBlock.sorting[sorting]
-        self.pointwise = nn.Linear(feature_dim, n_actions)
+        self.pointwise = nn.Linear(feature_dim, 1)
 
     def forward(self, feature, taus):
         taus = self.sort(taus)
         features = []
         for t in taus:
-            feature = self.ode_layer(feature, t)
+            feature = self.ode_layer(feature, t[None])
             features.append(feature)
         batch = th.stack(features, dim=1)
         out = self.pointwise(batch)
         return out
+
