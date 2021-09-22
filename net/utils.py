@@ -191,6 +191,7 @@ def tqc_quantile_huber_loss(td_errors, taus):
     loss = batch_quantile_huber_loss
     return loss
 
+
 class MLP(nn.Module):
     def __init__(
             self,

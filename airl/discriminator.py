@@ -26,7 +26,6 @@ class Discriminator(nn.Module):
         r = self.g(obs)
         v_t = self.h(obs)
         v_tp1 = self.h(next_obs)
-
         return r + (1. - dones) * v_tp1 - v_t
 
     def forward(self, obs, dones, logp_pi, next_obs):
@@ -46,8 +45,12 @@ class Discriminator(nn.Module):
         success = success.detach()
         logits = self(obs_pi, dones_pi, log_pi, next_obs_pi)
         loss = -F.logsigmoid(success * logits).mean()
-
         return loss
+
+    def clip_weight(self, low=-0.01, high=0.01):
+        for param in self.parameters():
+            param.data = param.data.clamp(low, high)
+        return
 
 
 

@@ -6,7 +6,7 @@ import torch as th
 
 
 class SpectralRiskNet(nn.Module):
-    def __init__(self, in_features, n_bins=10, init_uniform=True):
+    def __init__(self, in_features, n_bins=10, init_uniform=True, **kwargs):
         super(SpectralRiskNet, self).__init__()
         self.n_bins = n_bins
         self.float_n_bins_plus_eps = float(self.n_bins) + 1.
@@ -36,7 +36,7 @@ class SpectralRiskNet(nn.Module):
         for layer in self.layers:
             if hasattr(layer, 'weight'):
                 nn.init.uniform_(layer.weight, -self.n_bins, -3)
-            if hasattr(layer, 'bias'):
+            if hasattr(layer, 'bias') and layer.bias is not None:
                 layer.bias.data.fill_(-self.n_bins)
 
     def sample(self, feature, sample_shape):
@@ -51,4 +51,4 @@ class SpectralRiskNet(nn.Module):
     def entropy(self, feature):
         with th.no_grad():
             distribution = self.forward(feature)
-        return distribution.entropy()/self.maximum_entropy
+        return distribution.entropy()

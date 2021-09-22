@@ -6,6 +6,7 @@ from net.utils import Mlp
 from net.spectral_risk_net import SpectralRiskNet
 from typing_extensions import Final
 from net.odenet import ODEQuantileBlock
+from torch.nn.functional import log_softmax
 
 
 class CosineEmbeddingNetwork(nn.Module):
@@ -296,3 +297,37 @@ class Discriminator(nn.Module):
 
     def forward(self, feature):
         return self.layers(feature)
+
+
+class FractionProposalNetwork(nn.Module):
+    def __init__(self, embedding_dim, N=32):
+        super(FractionProposalNetwork, self).__init__()
+        self.net = nn.Linear(embedding_dim, N)
+
+    def forward(self, state_embeddings):
+
+        batch_size = state_embeddings.shape[0]
+
+        # Calculate (log of) probabilities q_i in the paper.
+        log_probs = log_softmax(self.net(state_embeddings), dim=1)
+        probs = log_probs.exp()
+        assert probs.shape == (batch_size, self.N)
+
+        tau_0 = th.zeros(
+            (batch_size, 1), dtype=state_embeddings.dtype,
+            device=state_embeddings.device)
+        taus_1_N = th.cumsum(probs, dim=1)
+
+        # Calculate \tau_i (i=0,...,N).
+        taus = th.cat((tau_0, taus_1_N), dim=1)
+        assert taus.shape == (batch_size, self.N+1)
+
+        # Calculate \hat \tau_i (i=0,...,N-1).
+        tau_hats = (taus[:, :-1] + taus[:, 1:]).detach() / 2.
+        assert tau_hats.shape == (batch_size, self.N)
+
+        # Calculate entropies of value distributions.
+        entropies = -(log_probs * probs).sum(dim=-1, keepdim=True)
+        assert entropies.shape == (batch_size, 1)
+
+        return taus, tau_hats, entropies

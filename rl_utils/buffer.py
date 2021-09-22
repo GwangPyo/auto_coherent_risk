@@ -95,9 +95,17 @@ class ReplayBuffer(object):
         data = (obs_t, action, reward, obs_tp1, done, info)
         if self.vectorized:
             for o, a, r, o_tp1, done, info in zip(*data):
-                self._add(o, a, r, o_tp1, done, info)
+                if done and "is_success" in info.keys():
+                    i = float(info["is_success"])
+                else:
+                    i = 0.
+                self._add(o, a, r, o_tp1, done, i)
         else:
-            self._add(*data)
+            if done and 'is_success' in info.keys():
+                i = float(info["is_success"])
+            else:
+                i = 0.
+            self._add(*data[:-1], info=i)
 
     def extend(self, obs_t, action, reward, obs_tp1, done, info):
         """
