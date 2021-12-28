@@ -24,6 +24,13 @@
             </list>
           </settings>
         </remote-mappings>
+        <remote-mappings server-id="python@sftp://yoo@115.145.172.133:22/home/yoo/.conda/envs/coherent_risk/bin/python3">
+          <settings>
+            <list>
+              <mapping local-root="$PROJECT_DIR$" remote-root="/home/yoo/auto_cohrent_risk" />
+            </list>
+          </settings>
+        </remote-mappings>
       </list>
     </list>
   </component>

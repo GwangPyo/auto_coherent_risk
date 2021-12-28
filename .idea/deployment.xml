@@ -1,25 +1,46 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <project version="4">
-  <component name="PublishConfigData" autoUpload="On explicit save action" serverName="cps_servers" remoteFilesAllowedToDisappearOnAutoupload="false">
+  <component name="PublishConfigData" autoUpload="On explicit save action" remoteFilesAllowedToDisappearOnAutoupload="false">
     <serverData>
-      <paths name="t3">
+      <paths name="yoo@115.145.172.133:22 password">
         <serverdata>
           <mappings>
-            <mapping deploy="/auto_coherent_risk" local="$PROJECT_DIR$" web="/" />
+            <mapping deploy="/home/yoo/auto_cohrent_risk" local="$PROJECT_DIR$" web="/" />
           </mappings>
         </serverdata>
       </paths>
-      <paths name="v4">
+      <paths name="yoo@115.145.172.133:22 password (1)">
         <serverdata>
           <mappings>
-            <mapping deploy="/auto_cohrent_risk" local="$PROJECT_DIR$" web="/" />
+            <mapping local="$PROJECT_DIR$" web="/" />
           </mappings>
         </serverdata>
       </paths>
-      <paths name="yoo@192.168.0.100:10022 password">
+      <paths name="yoo@115.145.172.133:22 password (2)">
         <serverdata>
           <mappings>
-            <mapping deploy="/home/yoo/coherent_riskrl" local="$PROJECT_DIR$" web="/" />
+            <mapping local="$PROJECT_DIR$" web="/" />
+          </mappings>
+        </serverdata>
+      </paths>
+      <paths name="yoo@115.145.172.133:22 password (3)">
+        <serverdata>
+          <mappings>
+            <mapping local="$PROJECT_DIR$" web="/" />
+          </mappings>
+        </serverdata>
+      </paths>
+      <paths name="yoo@115.145.172.133:22 password (4)">
+        <serverdata>
+          <mappings>
+            <mapping local="$PROJECT_DIR$" web="/" />
+          </mappings>
+        </serverdata>
+      </paths>
+      <paths name="yoo@115.145.172.133:22 password (5)">
+        <serverdata>
+          <mappings>
+            <mapping local="$PROJECT_DIR$" web="/" />
           </mappings>
         </serverdata>
       </paths>

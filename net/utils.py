@@ -145,26 +145,28 @@ class IQNLosses(object):
                td_errors.detach().abs().sum(dim=1).mean(dim=1, keepdim=True)
 
 
-def quantile_huber_loss(td_errors, taus):
-    # assert not taus.requires_grad
-    batch_size, N, N_dash = td_errors.shape
-    # Calculate huber loss element-wisely.
-    element_wise_huber_loss = IQNLosses.calculate_huber_loss(td_errors)
-    assert element_wise_huber_loss.shape == (
-        batch_size, N, N_dash)
+def calculate_huber_loss(td_errors, kappa=1.0):
+    return th.where(
+        td_errors.abs() <= kappa,
+        0.5 * td_errors.pow(2),
+        kappa * (td_errors.abs() - 0.5 * kappa))
 
-    # Calculate quantile huber loss element-wisely.
-    element_wise_quantile_huber_loss = th.abs(
-        taus[..., None] - (td_errors.detach() < 0).float()
-    ) * element_wise_huber_loss
-    assert element_wise_quantile_huber_loss.shape == (
-        batch_size, N, N_dash)
 
-    # Quantile huber loss.
-    batch_quantile_huber_loss = element_wise_quantile_huber_loss.sum(
-        dim=1).mean(dim=1, keepdim=True)
-    assert batch_quantile_huber_loss.shape == (batch_size, 1)
-    loss = batch_quantile_huber_loss
+def quantile_huber_loss(
+    current_quantiles: th.Tensor,
+    target_quantiles: th.Tensor,
+    taus: th.Tensor,
+    sum_over_quantiles: bool = True,
+) -> th.Tensor:
+
+    pairwise_delta = target_quantiles.unsqueeze(-2) - current_quantiles.unsqueeze(-1)
+    abs_pairwise_delta = th.abs(pairwise_delta)
+    huber_loss = th.where(abs_pairwise_delta > 1, abs_pairwise_delta - 0.5, pairwise_delta ** 2 * 0.5)
+    loss = th.abs(taus - (pairwise_delta.detach() < 0).float()) * huber_loss
+    if sum_over_quantiles:
+        loss = loss.sum(dim=-2).mean()
+    else:
+        loss = loss.mean()
     return loss
 
 
@@ -190,6 +192,50 @@ def tqc_quantile_huber_loss(td_errors, taus):
     assert batch_quantile_huber_loss.shape == (batch_size, 1)
     loss = batch_quantile_huber_loss
     return loss
+
+
+def calculate_fraction_loss(sa_quantiles, sa_quantile_hats, taus, weights=None):
+    assert not sa_quantiles.requires_grad
+    assert not sa_quantile_hats.requires_grad
+    sa_quantiles = sa_quantiles[:, 1:-1]
+    sa_quantiles = sa_quantiles.unsqueeze(-1)
+    sa_quantile_hats = sa_quantile_hats.unsqueeze(-1)
+
+    batch_size = sa_quantiles.shape[0]
+    N = taus.shape[1] - 1
+    assert sa_quantiles.shape == (batch_size, N-1, 1)
+
+    # NOTE: Proposition 1 in the paper requires F^{-1} is non-decreasing.
+    # I relax this requirements and calculate gradients of taus even when
+    # F^{-1} is not non-decreasing.
+
+    values_1 = sa_quantiles - sa_quantile_hats[:, :-1]
+    signs_1 = sa_quantiles > th.cat([
+        sa_quantile_hats[:, :1], sa_quantiles[:, :-1]], dim=1)
+    assert values_1.shape == signs_1.shape
+
+    values_2 = sa_quantiles - sa_quantile_hats[:, 1:]
+    signs_2 = sa_quantiles < th.cat([
+        sa_quantiles[:, 1:], sa_quantile_hats[:, -1:]], dim=1)
+    assert values_2.shape == signs_2.shape
+
+    gradient_of_taus = (
+        th.where(signs_1, values_1, -values_1)
+        + th.where(signs_2, values_2, -values_2)
+    ).view(batch_size, N-1)
+    assert not gradient_of_taus.requires_grad
+    assert gradient_of_taus.shape == taus[:, 1:-1].shape
+
+    # Gradients of the network parameters and corresponding loss
+    # are calculated using chain rule.
+    if weights is not None:
+        fraction_loss = ((
+            (gradient_of_taus * taus[:, 1:-1]).sum(dim=1, keepdim=True)
+        ) * weights).mean()
+    else:
+        fraction_loss = \
+            (gradient_of_taus * taus[:, 1:-1]).sum(dim=1).mean()
+    return fraction_loss
 
 
 class MLP(nn.Module):

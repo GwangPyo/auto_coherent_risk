@@ -17,7 +17,7 @@ class TauGenerator(object):
         self.device = device
 
     def __call__(self, shape):
-        return th.rand(size=shape, device=self.device)
+        return th.sort(th.rand(size=shape, device=self.device), dim=-1)[0]
 
 
 class CVaRTauGenerator(TauGenerator):
@@ -26,7 +26,21 @@ class CVaRTauGenerator(TauGenerator):
         self.alpha = alpha
 
     def __call__(self, shape):
-        return self.alpha * th.rand(size=shape, device=self.device)
+        return th.sort(self.alpha * th.rand(size=shape, device=self.device), dim=-1)[0]
+
+
+class RandomCVaRTauGenerator(TauGenerator):
+    def __init__(self, device, max_alpha=1.):
+        super().__init__(device)
+        self.max_alpha = max_alpha
+
+    def __call__(self, shape):
+        current_alpha = th.rand(size=(1, ), device=self.device) * self.max_alpha
+        return th.sort(current_alpha * th.rand(size=shape, device=self.device), dim=-1)[0]
+
+    def sample(self, shape):
+        current_alpha = th.rand(size=(1, ), device=self.device) * self.max_alpha
+        return th.sort(current_alpha * th.rand(size=shape, device=self.device), dim=-1)[0], current_alpha
 
 
 class WangTauGenerator(TauGenerator):
@@ -37,9 +51,10 @@ class WangTauGenerator(TauGenerator):
         self.eta = eta
 
     def __call__(self, shape):
-        taus = th.rand(size=shape, device=self.device)
-        taus = phi(phi_inverse(taus) + self.eta)
-        return taus.detach()
+        with th.no_grad():
+            taus = th.rand(size=shape, device=self.device)
+            taus = phi(phi_inverse(taus) + self.eta)
+            return th.sort(taus, dim=-1)[0]
 
 
 class PowerTauGenerator(WangTauGenerator):
@@ -48,6 +63,7 @@ class PowerTauGenerator(WangTauGenerator):
         self.eta_form = 1./(1 + np.abs(eta))
 
     def __call__(self, shape):
-        taus = th.rand(size=shape, device=self.device)
-        taus = 1 - th.pow(1. - taus, self.eta_form)
-        return taus
+        with th.no_grad():
+            taus = th.rand(size=shape, device=self.device)
+            taus = 1 - th.pow(1. - taus, self.eta_form)
+            return th.sort(taus, dim=-1)[0]

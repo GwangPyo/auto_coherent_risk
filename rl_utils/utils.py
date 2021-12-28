@@ -139,4 +139,6 @@ def make_writer(root_directory_name, tb_log_name, writing_option='Force'):
         return DummyWriter()
 
 
-
+def differentiable_sort(tensor: th.Tensor, dim=-1):
+    indices = th.argsort(tensor, dim=dim)
+    return th.gather(tensor, index=indices, dim=dim)

@@ -1,37 +1,41 @@
-from stable_baselines3 import SAC
-from env_wrappers import BipedalWalkerHardcoreWrapper
-from rl_utils.evaluation_utils import evaluate
+from sac import SAC
+from misc.keras_progbar import Progbar
 import numpy as np
-from misc.seed import fix_seed
+from stable_baselines3.common.vec_env import SubprocVecEnv
+import gym
+import pandas as pd
 
 
 if __name__ == '__main__':
 
-    rl_model = SAC(policy="MlpPolicy", env=BipedalWalkerHardcoreWrapper(),  verbose=1)
-    rl_model.learn(30000000)
-    rl_model.save("sb3_bipedalwalker_hardcore")
-    """
-    rl_model.learn(300000, tb_log_dir="/home/yoo/risk_rl_tb_log", tb_log_name=f"iqn_auto_bipdeal", tb_log_option="Force")
-    rl_model.save(f"/home/yoo/risk_results/models/auto_risk")
-    evaluate(env=wrapped_lunar_lander(), model=rl_model, steps=10000,
-             save_path=f"/home/yoo/risk_results/auto_risk_10000.csv")
-    for alpha in np.arange(0.6, 1.1, 0.1):
-        fix_seed(7777)
-        model = SAC(env=wrapped_lunar_lander(), policy="MlpIQNPolicy", policy_kwargs={"cvar_alpha": alpha})
-        model.learn(300000)
-        model.save(f"/home/yoo/risk_results/models/iqn_cvar_{alpha}")
-        evaluate(env=wrapped_lunar_lander(), model=model, steps=10000,
-                 save_path=f"/home/yoo/risk_results/cvar_{alpha}_10000.csv")
-    model = SAC(env=wrapped_lunar_lander(), policy="WangPolicy", policy_kwargs={"eta": -0.75})
-    model.learn(300000)
-    model.save(f"/home/yoo/risk_results/models/iqn_wang_{-0.75}")
-    evaluate(env=wrapped_lunar_lander(), model=model, steps=10000,
-             save_path=f"/home/yoo/risk_results/iqn_wang_{-0.75}_10000.csv")
+    models = [SAC.load(f"consist_cvar_dpg_sac_{i}") for i in range(6)]
 
-    model = SAC(env=wrapped_lunar_lander(), policy="PowerPolicy", policy_kwargs={"eta": -0.75})
-    model.learn(300000)
-    model.save(f"/home/yoo/risk_results/models/iqn_power_{-0.75}")
-    evaluate(env=wrapped_lunar_lander(), model=model, steps=10000,
-             save_path=f"/home/yoo/risk_results/iqn_power_{-0.75}_10000.csv")
-    
-    """
+
+    def generator():
+        import navigation_2d
+        import warnings
+        warnings.filterwarnings("ignore")
+        return gym.make("Navi-Acc-Full-Obs-Task0_easy-v0")
+
+    env = generator()
+    for _ in range(100):
+        obs = env.reset()
+        for _ in range(20):
+            a = env.action_space.sample()
+            obs, reward, done, info = env.step(a)
+            if done:
+                print("SAFSDFA")
+                exit()
+        actions = {i:[] for i in range(6)}
+        for alpha in [0.1, 0.2, 0.3, 0.5, 1.0]:
+            for i, model in enumerate(models):
+                model.policy.actor.set_rollout_alpha(alpha)
+                action, _ = model.predict(obs)
+                actions[i].append(action)
+        d_a = [0.1, 0.1, 0.2, 0.5]
+        for j in range(6):
+            print("j:", j)
+            for (i, a), d_alpha in zip(enumerate(actions[j][:-1]), d_a):
+                a_p1 = actions[j][i + 1]
+                print(((a_p1 - a)/d_alpha))
+            print("\n\n")

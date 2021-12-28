@@ -1,51 +1,174 @@
 import torch.nn as nn
 import torch as th
 from net.utils import MLP
-from net.odenet import ODEQuantileBlock
-from net.nets import CosineEmbeddingNetwork, FractionProposalNetwork
+from net.nets import CosineEmbeddingNetwork
+from rl_utils.utils import differentiable_sort
+import numpy as np
+from UMNN.models.UMNN.MonotonicNN import MonotonicNN
 
+class AlphaEmbeddingNet(nn.Module):
+    def __init__(self, embed_dim=64):
+        super().__init__()
+        self.layer = nn.Sequential( nn.Linear(1, 64),
+                                    nn.ReLU(),
+                                    nn.Linear(64, embed_dim))
 
-class ODEQfunction(nn.Module):
-    def __init__(self, feature_dim, action_dim, net_arch=(64, 64)):
-        super(ODEQfunction, self).__init__()
-        self.linear = MLP(feature_dim + action_dim, net_arch[:-1], net_arch[-1])
-        self.quantile_net = ODEQuantileBlock(net_arch[-1], )
-
-    def forward(self, obs, action, taus):
-        qf_input = th.cat((obs, action), dim=1)
-        z = self.linear(qf_input)
-        quantiles = self.quantile_net(z, taus)
-        return th.squeeze(quantiles)
+    def forward(self, alpha):
+        return self.layer(alpha)
 
 
 class Qfunction(nn.Module):
-    def __init__(self, feature_dim, action_dim, net_arch=(256, 256), num_cosines=64):
+    class Cumsum(nn.Module):
+        def forward(self, x):
+            return x.cumsum(dim=-1)
+
+    def __init__(self, feature_dim, action_dim, net_arch, num_cosines):
         super(Qfunction, self).__init__()
-        self.linear = MLP(feature_dim + action_dim, net_arch[:-1], net_arch[-1])
+        self.mlp = MLP(feature_dim + action_dim, net_arch, output_size=net_arch[-1])
         self.cosine_embedding_net = CosineEmbeddingNetwork(num_cosines, embedding_dim=net_arch[-1])
-        self.quantile_net = nn.Sequential(nn.Linear(net_arch[-1], 256), nn.Mish(), nn.Linear(256, 1))
+        self.qr_logits = nn.Sequential(nn.Linear(net_arch[-1], 256), nn.ReLU(), nn.Linear(256, 1))
+        self.monotonize = nn.Sequential(nn.Softmax(dim=-1), Qfunction.Cumsum())
+        self.embedding_dim = net_arch[-1]
+        self.linear = nn.Linear(self.embedding_dim, num_cosines, bias=False)
+        self.scale = nn.Sequential(nn.Linear(num_cosines, 1, bias=False), nn.Softplus())
+        self.bias = nn.Sequential(nn.Linear(num_cosines, 1, bias=True))
+
+    def embedding(self, feature, action):
+        return self.mlp(th.cat((feature, action), dim=-1))
+
+    def forward(self, feature, action, taus):
+        batch_size = feature.shape[0]
+        taus = differentiable_sort(taus)
+        x = th.cat((feature, action), dim=1)
+        z = self.mlp(x)
+        embedded_tau = self.cosine_embedding_net(taus)
+        N = taus.shape[1]
+        z_ = z.view(-1, 1, self.embedding_dim)
+        embedding = z_ * embedded_tau
+        qr_logits = self.qr_logits(embedding)
+        qr_logits = qr_logits.reshape(-1, N)
+        qr_logits = self.monotonize(qr_logits)
+
+        z_prime = self.linear(z)
+        alpha = self.scale(z_prime)
+        beta = self.bias(z_prime)
+        quantiles = qr_logits * alpha + beta
+        ret = quantiles.view(batch_size, N)
+        return ret
+
+
+class MonotonicIQN(nn.Module):
+    def __init__(self, feature_dim, action_dim, net_arch):
+        super().__init__()
+        self.embed = MLP(feature_dim + action_dim, net_arch[:-1], net_arch[-1])
+        self.monotone = MonotonicNN(net_arch[-1] + 1, list((net_arch[-1], net_arch[-1])))
 
     def forward(self, obs, action, taus):
+        z = self.embed(th.cat((obs, action), dim=-1))
+        n_quantile = taus.shape[-1]
+        taus = taus.reshape(-1, 1)
+        required = int( taus.shape[0]/ z.shape[0])
+        z = th.repeat_interleave(z, required, dim=0)
+        quantiles = self.monotone.forward(taus, z)
+        return quantiles.reshape(-1, n_quantile)
 
-        qf_input = th.cat((obs, action), dim=1)
-        z = self.linear(qf_input)
-        z = th.unsqueeze(z, dim=1)
 
-        # z.shape == (batch_size, 1, embed_dim)
+class AlphaAttention(nn.Module):
+    def __init__(self, feature_dim, embedding_dim):
+        super().__init__()
+        self.query_net = AlphaEmbeddingNet(embed_dim=embedding_dim)
+        self.key_net = MLP(feature_dim, hidden_sizes=(64, 64), output_size=embedding_dim)
+        self.value_net = MLP(feature_dim, hidden_sizes=(64, 64), output_size=embedding_dim)
+        self.sqrt_dk = np.sqrt(embedding_dim)
+        self.embedding_dim = embedding_dim
+
+    def forward(self, feature, alpha):
+        Q = self.query_net(alpha)
+        K = self.key_net(feature)
+        V = self.value_net(feature)
+        Q = Q[:, None, :]
+        K = K[:, None, :]
+        V = V[:, :, None]
+        QKt = th.bmm(Q.transpose(1, 2), K)/self.sqrt_dk
+        attention = th.bmm(th.softmax(QKt, dim=-1), V)
+        attention = attention.view(-1, self.embedding_dim)
+        return attention
+
+
+class AlphaQfunction(nn.Module):
+    class Cumsum(nn.Module):
+        def forward(self, x):
+            return x.cumsum(dim=-1)
+
+    def __init__(self, feature_dim, action_dim, net_arch, num_cosines):
+        super(AlphaQfunction, self).__init__()
+        self.mlp = AlphaAttention(feature_dim + action_dim, net_arch[-1])
+        self.cosine_embedding_net = CosineEmbeddingNetwork(num_cosines, embedding_dim=net_arch[-1])
+        self.qr_logits = nn.Sequential(nn.Linear(net_arch[-1], 256), nn.ReLU(), nn.Linear(256, 1))
+        self.monotonize = nn.Sequential(nn.Softmax(dim=-1), Qfunction.Cumsum())
+        self.embedding_dim = net_arch[-1]
+        self.linear = nn.Linear(self.embedding_dim, num_cosines, bias=False)
+        self.scale = nn.Sequential(nn.Linear(num_cosines, 1, bias=False), nn.Softplus())
+        self.bias = nn.Sequential(nn.Linear(num_cosines, 1, bias=True))
+
+    def embedding(self, feature, action, alpha):
+        return self.mlp(th.cat((feature, action), dim=-1), alpha)
+
+    def forward(self, feature, action, taus, alpha):
+        batch_size = feature.shape[0]
+        taus = differentiable_sort(taus)
+        x = th.cat((feature, action), dim=1)
+        z = self.mlp(x, alpha)
         embedded_tau = self.cosine_embedding_net(taus)
-        # embedded_taus.shape == (batch_size, N, embed_dim)
         N = taus.shape[1]
-        hadamard = z * embedded_tau
+        z_ = z.view(-1, 1, self.embedding_dim)
+        embedding = z_ * embedded_tau
+        qr_logits = self.qr_logits(embedding)
+        qr_logits = qr_logits.reshape(-1, N)
+        qr_logits = self.monotonize(qr_logits)
 
-        quantiles = self.quantile_net(hadamard)
+        z_prime = self.linear(z)
+        alpha = self.scale(z_prime)
+        beta = self.bias(z_prime)
+        quantiles = qr_logits * alpha + beta
+        ret = quantiles.view(batch_size, N)
+        return ret
 
-        quantiles = quantiles.view(-1, N)
 
-        return quantiles
+class AlphaMonotonicIQN(nn.Module):
+    def __init__(self, feature_dim, action_dim, net_arch):
+        super().__init__()
+        self.embed = AlphaAttention(feature_dim + action_dim, net_arch[-1])
+        self.monotone = MonotonicNN(net_arch[-1] + 1, list((net_arch[-1], net_arch[-1])))
+
+    def forward(self, obs, action, taus, alpha):
+        z = self.embed(th.cat((obs, action), dim=-1), alpha)
+        n_quantile = taus.shape[-1]
+        taus = taus.reshape(-1, 1)
+        required = int( taus.shape[0]/ z.shape[0])
+        z = th.repeat_interleave(z, required, dim=0)
+        quantiles = self.monotone.forward(taus, z)
+        return quantiles.reshape(-1, n_quantile)
+
+
+
+class ScalarQfunction(nn.Module):
+    def __init__(self, feature_dim, action_dim, net_arch=(64, 64)):
+        super().__init__()
+        self.layers = MLP(feature_dim + action_dim, net_arch, 1)
+
+    def forward(self, obs, action):
+        return self.layers(th.cat((obs, action), dim=-1))
+
+
+class Discriminator(ScalarQfunction):
+    def __init__(self, feature_dim, action_dim, net_arch=(256, 256)):
+        super().__init__(feature_dim, action_dim, net_arch)
+        self.layers = nn.Sequential(self.layers, nn.Sigmoid())
 
 
 class Critics(nn.Module):
-    def __init__(self, feature_dim, action_dim, n_nets, net_arch=(256, 256), num_cosines=64):
+    def __init__(self, feature_dim, action_dim, n_nets, net_arch=(64, 64), num_cosines=64):
         super().__init__()
         self.nets = []
         self.n_nets = n_nets
@@ -54,38 +177,15 @@ class Critics(nn.Module):
             self.add_module(f'qf{i}', net)
             self.nets.append(net)
 
-    def forward(self, obs, action, taus):
-        quantiles = th.stack(tuple(net(obs, action, taus) for net in self.nets), dim=1)
-        return quantiles
-
-
-class ODECritics(nn.Module):
-    def __init__(self, feature_dim, action_dim, n_nets, net_arch=(64, 64)):
-        super().__init__()
-        self.nets = []
-        self.n_nets = n_nets
-        for i in range(n_nets):
-            net = ODEQfunction(feature_dim, action_dim, net_arch=net_arch)
-            self.add_module(f'qf{i}', net)
-            self.nets.append(net)
+    def embedding(self, obs, action):
+        return self.nets[0].embedding(obs, action)
 
     def forward(self, obs, action, taus):
         quantiles = th.stack(tuple(net(obs, action, taus) for net in self.nets), dim=1)
         return quantiles
 
 
-class ScalarQfunction(nn.Module):
-    def __init__(self, feature_dim, action_dim, net_arch=(64, 64)):
-        super(ScalarQfunction, self).__init__()
-        net_arch = net_arch + (1, )
-        self.layers = MLP(feature_dim, action_dim, net_arch)
-
-    def forward(self, obs, action):
-        z = th.cat((obs, action), dim=1)
-        return self.layers(z)
-
-
-class ScalarCritics(nn.Module):
+class ScalarCritic(nn.Module):
     def __init__(self, feature_dim, action_dim, n_nets, net_arch=(64, 64)):
         super().__init__()
         self.nets = []
@@ -95,31 +195,29 @@ class ScalarCritics(nn.Module):
             self.add_module(f'qf{i}', net)
             self.nets.append(net)
 
-    def forward(self, obs, action):
-        qf = th.stack(tuple(net(obs, action) for net in self.nets), dim=1)
-        return qf
-
-
-class FQFQfunction(Qfunction):
-    def __init__(self, feature_dim, action_dim, net_arch=(256, 256), num_cosines=64, N=32, target=False):
-        self.N = N
-        self.target = target
-        super(FQFQfunction, self).__init__(feature_dim, action_dim, net_arch, num_cosines)
-
     def embedding(self, obs, action):
-        qf_input = th.cat((obs, action), dim=1)
-        z = self.linear(qf_input)
-        return z
+        return self.nets[0].embedding(obs, action)
 
-    def forward(self, obs, action, taus=None):
-        qf_input = th.cat((obs, action), dim=1)
-        z = self.linear(qf_input)
-        z = th.unsqueeze(z, dim=1)
-        embedded_tau = self.cosine_embedding_net(taus)
-        # embedded_taus.shape == (batch_size, N, embed_dim)
-        N = taus.shape[1]
-        hadamard = z * embedded_tau
-        quantiles = self.quantile_net(hadamard)
-        quantiles = quantiles.view(-1, N)
+    def forward(self, obs, action, taus):
+        quantiles = th.stack(tuple(net(obs, action, taus) for net in self.nets), dim=1)
         return quantiles
+
+
+class AlphaCritic(nn.Module):
+    def __init__(self, feature_dim, action_dim, n_nets, net_arch=(64, 64)):
+        super().__init__()
+        self.nets = []
+        self.n_nets = n_nets
+        for i in range(n_nets):
+            net = AlphaQfunction(feature_dim, action_dim, net_arch=net_arch, num_cosines=64 )
+            self.add_module(f'qf{i}', net)
+            self.nets.append(net)
+
+    def embedding(self, obs, action, alpha):
+        return self.nets[0].embedding(obs, action, alpha)
+
+    def forward(self, obs, action, taus, alpha):
+        quantiles = th.stack(tuple(net(obs, action, taus, alpha) for net in self.nets), dim=1)
+        return quantiles
+
 

@@ -23,10 +23,11 @@ class SAC(object):
         self.action_space = self.env.action_space
 
         self.device = get_device()
-        if policy == "MlpIQNPolicy":
-            self.buffer = ReplayBuffer(buffer_size, self.device)
-        else:
+        # if policy == "MlpIQNPolicy":
+        if policy == 'GoalAutoRiskPolicy':
             self.buffer = GoalReplayBuffer(buffer_size, self.device)
+        else:
+            self.buffer = ReplayBuffer(buffer_size, self.device)
         if policy_kwargs is None:
             policy_kwargs = {}
         policy_class = policies[policy]
@@ -68,6 +69,7 @@ class SAC(object):
         start_time = time.time()
         n_episodes = 0
         epilen = 0
+
         if tb_log_dir is None:
             writer = make_writer(root_directory_name="/home/yoo", tb_log_name=f"{self.policy_name}", writing_option="Dummy")
         elif tb_log_dir is not None and tb_log_name is None:
@@ -75,6 +77,11 @@ class SAC(object):
         else:
             writer = make_writer(root_directory_name=tb_log_dir, tb_log_name=f"{tb_log_name}", writing_option=tb_log_option)
 
+        if hasattr(self.policy, "setup_scheduling"):
+            self.policy.setup_scheduling(steps - learning_starts)
+            alpha = np.random.uniform(0, 1)
+            self.policy.actor.set_rollout_alpha(alpha)
+            logkv("episode/cvar_alpha", alpha)
         for s in range(steps):
             if s < learning_starts:
                 actions = self.sample_random_actions()
@@ -91,10 +98,16 @@ class SAC(object):
                 episode_rewards = []
                 current_time = time.time()
                 n_episodes += 1
+                if hasattr(self.policy, "setup_scheduling"):
+                    logkv("episode/cvar_alpha", alpha)
+                    alpha = np.random.uniform(0, 1)
+                    self.policy.actor.set_rollout_alpha(alpha)
                 logkv("episode/len", epilen)
                 epilen = 0
                 logkv("episode/n_episode", n_episodes)
                 logkv(f"episode/mean_100 reward", np.mean(mean_episode_rewards))
+                logkv(f"episode/mean_100 return var", np.var(mean_episode_rewards))
+
                 writer.add_scalar("episode/episode_reward", mean_episode_rewards[-1], s)
                 logkv("time/time_elapsed", timedelta(seconds=int(current_time - start_time)))
                 logkv("time/steps", s)

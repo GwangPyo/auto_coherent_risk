@@ -33,10 +33,15 @@ def result_to_csv(path, result_dict):
     return df
 
 
-def evaluate(env, model, save_path, steps=1000, verbose=True):
+def evaluate(env, model, save_path, steps=1000, verbose=True, save=True):
     result = _evaluate(env, model, steps, verbose)
-    df = result_to_csv(save_path, result)
-    print(df)
+    if save:
+        df = result_to_csv(save_path, result)
+        if verbose:
+            print(df)
+    else:
+        result = pd.DataFrame.from_dict(result)
+    return result
 
 
 def read_csv(path, keys):
