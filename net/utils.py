@@ -152,6 +152,16 @@ def calculate_huber_loss(td_errors, kappa=1.0):
         kappa * (td_errors.abs() - 0.5 * kappa))
 
 
+@th.jit.script
+def _quantile_huber_loss(current_quantiles: th.Tensor,
+    target_quantiles: th.Tensor,
+    taus: th.Tensor):
+    pairwise_delta = target_quantiles.unsqueeze(-2) - current_quantiles.unsqueeze(-1)
+    abs_pairwise_delta = th.abs(pairwise_delta)
+    huber_loss = th.where(abs_pairwise_delta > 1, abs_pairwise_delta - 0.5, pairwise_delta ** 2 * 0.5)
+    loss = th.abs(taus - (pairwise_delta.detach() < 0).float()) * huber_loss
+    return loss
+
 def quantile_huber_loss(
     current_quantiles: th.Tensor,
     target_quantiles: th.Tensor,
@@ -159,10 +169,7 @@ def quantile_huber_loss(
     sum_over_quantiles: bool = True,
 ) -> th.Tensor:
 
-    pairwise_delta = target_quantiles.unsqueeze(-2) - current_quantiles.unsqueeze(-1)
-    abs_pairwise_delta = th.abs(pairwise_delta)
-    huber_loss = th.where(abs_pairwise_delta > 1, abs_pairwise_delta - 0.5, pairwise_delta ** 2 * 0.5)
-    loss = th.abs(taus - (pairwise_delta.detach() < 0).float()) * huber_loss
+    loss = _quantile_huber_loss(current_quantiles, target_quantiles, taus)
     if sum_over_quantiles:
         loss = loss.sum(dim=-2).mean()
     else:

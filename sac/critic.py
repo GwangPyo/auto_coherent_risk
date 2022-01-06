@@ -4,7 +4,7 @@ from net.utils import MLP
 from net.nets import CosineEmbeddingNetwork
 from rl_utils.utils import differentiable_sort
 import numpy as np
-from UMNN.models.UMNN.MonotonicNN import MonotonicNN
+from UMNN.models.UMNN.MonotonicNN import MonotonicNN, CriticMonotonicNN
 
 class AlphaEmbeddingNet(nn.Module):
     def __init__(self, embed_dim=64):
@@ -116,7 +116,7 @@ class AlphaQfunction(nn.Module):
 
     def forward(self, feature, action, taus, alpha):
         batch_size = feature.shape[0]
-        taus = differentiable_sort(taus)
+        taus = th.sort(taus, dim=0)[0]
         x = th.cat((feature, action), dim=1)
         z = self.mlp(x, alpha)
         embedded_tau = self.cosine_embedding_net(taus)
@@ -136,17 +136,34 @@ class AlphaQfunction(nn.Module):
 
 
 class AlphaMonotonicIQN(nn.Module):
-    def __init__(self, feature_dim, action_dim, net_arch):
+    def __init__(self, feature_dim, action_dim, net_arch, num_taus):
         super().__init__()
-        self.embed = AlphaAttention(feature_dim + action_dim, net_arch[-1])
-        self.monotone = MonotonicNN(net_arch[-1] + 1, list((net_arch[-1], net_arch[-1])))
+        self.embed = th.jit.script(AlphaAttention(int(feature_dim + action_dim), int(net_arch[-1])))
+        self.monotone = MonotonicNN(net_arch[-1] + 1, list((net_arch[-1], net_arch[-1])), nb_steps=50)
 
     def forward(self, obs, action, taus, alpha):
         z = self.embed(th.cat((obs, action), dim=-1), alpha)
-        n_quantile = taus.shape[-1]
-        taus = taus.reshape(-1, 1)
-        required = int( taus.shape[0]/ z.shape[0])
-        z = th.repeat_interleave(z, required, dim=0)
+        with th.no_grad():
+            n_quantile = taus.shape[-1]
+            taus = th.sort(taus, dim=-1)[0]
+
+            # taus_zero = th.zeros_like(taus)
+            # taus_zero[:, 1:] = taus[:, :-1]
+            # taus_zero = taus_zero.reshape(-1, 1)
+            taus = taus.reshape(-1, 1)
+            required = taus.shape[0] // z.shape[0]
+            embed_shape = z.shape[-1]
+
+        # z = th.repeat_interleave(z, required, dim=0)
+        z = z[None].expand(required, -1, -1).reshape(-1, embed_shape)
+        """
+        quantiles_interval = self.monotone.forward(taus, z, taus_zero)
+        quantiles_interval = quantiles_interval.reshape(-1, n_quantile)
+
+        bias = th.zeros_like(quantiles_interval)
+        bias[:, 1:] = th.cumsum(quantiles_interval[:, :-1], dim=-1)
+        quantiles = quantiles_interval + bias
+        """
         quantiles = self.monotone.forward(taus, z)
         return quantiles.reshape(-1, n_quantile)
 
@@ -204,12 +221,12 @@ class ScalarCritic(nn.Module):
 
 
 class AlphaCritic(nn.Module):
-    def __init__(self, feature_dim, action_dim, n_nets, net_arch=(64, 64)):
+    def __init__(self, feature_dim, action_dim, n_nets, net_arch=(64, 64), num_taus=64):
         super().__init__()
         self.nets = []
         self.n_nets = n_nets
         for i in range(n_nets):
-            net = AlphaQfunction(feature_dim, action_dim, net_arch=net_arch, num_cosines=64 )
+            net = th.jit.script(AlphaQfunction(int(feature_dim), int(action_dim), net_arch=net_arch, num_cosines=num_taus))
             self.add_module(f'qf{i}', net)
             self.nets.append(net)
 

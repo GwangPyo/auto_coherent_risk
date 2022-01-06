@@ -14,17 +14,19 @@ from rl_utils.utils import make_writer
 
 
 class SAC(object):
-    def __init__(self, env, policy, buffer_size=int(1e+6), policy_kwargs=None, batch_size=256, tau=0.005):
+    def __init__(self, env, policy, buffer_size=int(1e+6), policy_kwargs=None, batch_size=256, tau=0.005, device='auto'):
         if not isinstance(env, VecEnv):
             env = DummyVecEnv([lambda: env])
 
         self.env = env
         self.observation_space = self.env.observation_space
         self.action_space = self.env.action_space
-
-        self.device = get_device()
+        if device == 'auto':
+            self.device = get_device()
+        else:
+            self.device = device
         # if policy == "MlpIQNPolicy":
-        if policy == 'GoalAutoRiskPolicy':
+        if policy == 'GoalAutoRisk  Policy':
             self.buffer = GoalReplayBuffer(buffer_size, self.device)
         else:
             self.buffer = ReplayBuffer(buffer_size, self.device)
@@ -33,6 +35,7 @@ class SAC(object):
         policy_class = policies[policy]
         self.policy_name = policy
         self.policy_kwargs = policy_kwargs
+
         self.policy = policy_class(self.env, device=self.device, **policy_kwargs)
         self.batch_size = batch_size
         self.num_envs = self.env.num_envs
@@ -67,6 +70,7 @@ class SAC(object):
         mean_episode_success = deque(maxlen=100)
         episode_rewards = []
         start_time = time.time()
+        last_time = start_time
         n_episodes = 0
         epilen = 0
 
@@ -97,6 +101,9 @@ class SAC(object):
                 mean_episode_rewards.append(np.sum(episode_rewards))
                 episode_rewards = []
                 current_time = time.time()
+                fps = epilen / (current_time - last_time + 1e-12)
+
+                last_time = current_time
                 n_episodes += 1
                 if hasattr(self.policy, "setup_scheduling"):
                     logkv("episode/cvar_alpha", alpha)
@@ -117,7 +124,6 @@ class SAC(object):
                     logkv("episode/100 epi succ_ratio", mean_succ)
                     writer.add_scalar("episode/episode_success", float(info[0]["is_success"]), s)
 
-                fps = s /(current_time - start_time + 1e-12)
                 logkv("time/fps", int(fps))
                 eta = (steps - s)/fps
                 logkv("time/eta", timedelta(seconds=int(eta)))
@@ -161,9 +167,3 @@ class SAC(object):
         model.policy.load_state_dict(state_dict)
         return model
 
-
-if __name__ == '__main__':
-    import gym
-    from env_wrappers import wrapped_lunar_lander
-    rl_model = SAC(policy="MlpIQNPolicy", env= wrapped_lunar_lander())
-    rl_model.learn(50000, )

@@ -4,12 +4,8 @@ from rl_utils.evaluation_utils import evaluate, collect
 import numpy as np
 from misc.seed import fix_seed
 import pandas as pd
-# from sac import SAC
-from misc.keras_progbar import Progbar
-from evar_sac.evar_sac import EVaRSAC
-# from stable_baselines3 import SAC
 from sac import SAC
-from imitation.trainer import Trainer
+from misc.keras_progbar import Progbar
 
 
 if __name__ == '__main__':
@@ -94,16 +90,17 @@ if __name__ == '__main__':
         return gym.make("Navi-Acc-Full-Obs-Task0_easy-v0")
 
     def func(verbose, alpha, i):
-        model = EVaRSAC(env=generator(), policy="MlpPolicy", verbose=verbose, device='cpu', target_entropy=np.log(1 - alpha))
+        model = SAC(env=generator(), policy="MlpPolicy")
         model.learn(int(5e+5))
-        model.save(f"evar_sac_{1 - alpha}_{i}")
+        model.save(f"{1 - alpha}_{i}")
 
     from multiprocessing import Process
     processes = []
     cnt = 0
     for i in range(30):
-        for alpha in [0.05, 0.1, 0.5, 1]:
-            model = SAC(env=generator(), policy="EVaRPolicy", policy_kwargs={"eta": 0.75})  # , verbose=1, target_entropy=np.log(1 - alpha))
+        for beta in [0.05, 0.1, 0.5, 1]:
+            model = SAC(env=generator(), policy="EVaRPolicy", policy_kwargs={"beta": beta})  # , verbose=1, target_entropy=np.log(1 - alpha))
             model.learn(int(3e+5))
-            model.save(f"cvar_alpha_{alpha}")
+            model.save(f"auto_cvar{i}")
+
 

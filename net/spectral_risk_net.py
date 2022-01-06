@@ -15,11 +15,13 @@ class Negation(nn.Module):
 
 
 class FractionProposalNetwork(nn.Module):
-    def __init__(self, device, N=32, embedding_dim=256):
+    def __init__(self, device, N=32, embedding_dim=64):
         super(FractionProposalNetwork, self).__init__()
 
         self.net = nn.Sequential(
-            nn.Linear(embedding_dim, N)
+            nn.Linear(embedding_dim, 256),
+            nn.ReLU(),
+            nn.Linear(256, N)
         )
         self.N = N
         self.embedding_dim = embedding_dim
@@ -55,6 +57,65 @@ class FractionProposalNetwork(nn.Module):
         entropies = -(log_probs * probs).sum(dim=-1, keepdim=True)
         assert entropies.shape == (batch_size, 1)
         return taus, tau_hats, entropies
+
+
+class EVarFractionProposalNetwork(FractionProposalNetwork):
+    def __init__(self, device, N=32, embedding_dim=64, beta=0.05):
+        super(EVarFractionProposalNetwork, self).__init__(device, N, embedding_dim)
+        self.log_lambda = th.Tensor([-1]).to(self.device)
+        self.log_lambda.requires_grad = True
+        self.lambda_optim = th.optim.Adam([self.log_lambda], lr=3e-4)
+        self.max_kl = -np.log(beta)
+
+    def forward(self, state_embeddings):
+
+        batch_size = state_embeddings.shape[0]
+
+        # Calculate (log of) probabilities q_i in the paper.
+        log_probs = F.log_softmax(self.net(state_embeddings), dim=1)
+        probs = log_probs.exp()
+        assert probs.shape == (batch_size, self.N)
+
+        tau_0 = th.zeros(
+            (batch_size, 1), dtype=state_embeddings.dtype,
+            device=state_embeddings.device)
+        taus_1_N = th.cumsum(probs, dim=1)
+
+        # Calculate \tau_i (i=0,...,N).
+        taus = th.cat((tau_0, taus_1_N), dim=1)
+        assert taus.shape == (batch_size, self.N+1)
+
+        # Calculate \hat \tau_i (i=0,...,N-1).
+        tau_hats = (taus[:, :-1] + taus[:, 1:]).detach() / 2.
+        assert tau_hats.shape == (batch_size, self.N)
+
+        # Calculate kl of value distributions.
+        kl = -(log_probs * probs).sum(dim=-1, keepdim=True)
+        return taus[:, :-5], tau_hats, kl
+
+    def tau_loss(self, obs, action, critic, ):
+        with th.no_grad():
+            embedding = critic.embedding(obs, action)
+        taus_action, taus_hat, kl = self(embedding)
+        quantile_tau_hat = critic(obs, action, taus_action)
+        quantile_tau_hat = quantile_tau_hat.mean(dim=-1).mean(dim=-1, keepdim=True)
+
+        ###############################
+        lambda_loss = self.log_lambda * ((self.max_kl - kl.mean()).detach())
+
+        self.lambda_optim.zero_grad()
+        lambda_loss.backward()
+        self.lambda_optim.step()
+
+        ################################
+        lagrange_lambda = self.log_lambda.exp().detach()
+
+        loss = quantile_tau_hat + lagrange_lambda * kl
+        return loss.mean(), lambda_loss, kl/self.max_kl, lagrange_lambda
+
+    def kl(self, logprob):
+        return -logprob.sum(dim=1, keepdim=True)
+
 
 
 class SpectralRiskNet(nn.Module):
